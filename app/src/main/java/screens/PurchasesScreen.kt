@@ -33,6 +33,9 @@ import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import androidx.compose.runtime.*
 import android.content.Context
+import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material3.ExposedDropdownMenuBoxScope
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -65,20 +68,29 @@ fun PurchasesScreen(viewModel: PharmacyViewModel) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // --- 1. بيانات الفاتورة والمورد ---
-        Card(colors = CardDefaults.cardColors(containerColor = Color.White), elevation = CardDefaults.cardElevation(1.dp)) {
-            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("بيانات فاتورة الشراء", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF173B66))
+// --- 1. بيانات الفاتورة والمورد ---
+// --- 1. بيانات الفاتورة والمورد ---
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), elevation = CardDefaults.cardElevation(2.dp)) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("بيانات فاتورة الشراء", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.primary)
 
-                OutlinedTextField(
-                    value = supplierName, onValueChange = { supplierName = it },
-                    label = { Text("اسم المورد *") }, modifier = Modifier.fillMaxWidth(), singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                    keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) })
+                // 👇 المكون الجديد الذكي (بدلاً من الحقلين القديمين) 👇
+                val savedSuppliers by viewModel.supplierNames.collectAsState()
+
+                SupplierAutocompleteField(
+                    value = supplierName,
+                    onValueChange = { supplierName = it },
+                    suppliers = savedSuppliers,
+                    onNext = { focusManager.moveFocus(FocusDirection.Down) }
                 )
+
+                // حقل رقم الفاتورة
                 OutlinedTextField(
-                    value = invoiceNumber, onValueChange = { invoiceNumber = it },
-                    label = { Text("رقم الفاتورة *") }, modifier = Modifier.fillMaxWidth(), singleLine = true,
+                    value = invoiceNumber,
+                    onValueChange = { invoiceNumber = it },
+                    label = { Text("رقم الفاتورة *") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() })
                 )
@@ -89,7 +101,7 @@ fun PurchasesScreen(viewModel: PharmacyViewModel) {
         Button(
             onClick = { showAddItemDialog = true },
             modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB))
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary) // 👈 اللون النيلي الجديد
         ) {
             Text("➕ إضافة صنف جديد للفاتورة", color = Color.White)
         }
@@ -206,13 +218,92 @@ fun PurchasesScreen(viewModel: PharmacyViewModel) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+fun SupplierAutocompleteField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    suppliers: List<String>,
+    modifier: Modifier = Modifier,
+    label: String = "اسم المورد *",
+    onNext: () -> Unit = {}
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    val query = value.trim()
+    val filtered = remember(query, suppliers) {
+        if (query.isEmpty()) emptyList()
+        else suppliers.filter { it.contains(query, ignoreCase = true) }.take(6)
+    }
+    val exactMatch = suppliers.any { it.equals(query, ignoreCase = true) }
+    val showAddNew = query.isNotEmpty() && !exactMatch
+    val hasItems = filtered.isNotEmpty() || showAddNew
+
+    ExposedDropdownMenuBox(
+        expanded = expanded && hasItems,
+        onExpandedChange = { expanded = it && value.isNotBlank() },
+        modifier = modifier
+    ) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = { new ->
+                val isDeleting = new.length < value.length
+                onValueChange(new)
+                // القائمة تفتح فقط عند الكتابة، وتغلق عند الحذف أو الفراغ
+                expanded = new.isNotBlank() && !isDeleting
+            },
+            label = { Text(label) },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+            keyboardActions = KeyboardActions(onNext = { onNext() }),
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(MenuAnchorType.PrimaryEditable) // 👈 حل المشكلة الأساسية
+        )
+
+        ExposedDropdownMenu(
+            expanded = expanded && hasItems,
+            onDismissRequest = { expanded = false }
+        ) {
+            filtered.forEach { name ->
+                DropdownMenuItem(
+                    text = { Text(name) },
+                    onClick = {
+                        onValueChange(name)
+                        expanded = false
+                    }
+                )
+            }
+            if (showAddNew) {
+                DropdownMenuItem(
+                    text = { Text("➕ إضافة \"$query\" كمورد جديد", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold) },
+                    onClick = {
+                        onValueChange(query)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 fun AddPurchaseItemDialog(onDismiss: () -> Unit, onAdd: (PurchaseItemInput) -> Unit) {
     val context = LocalContext.current
-    val focusManager = LocalFocusManager.current // 👈 للتحكم في التنقل بين الحقول داخل النافذة
-    val focusRequester = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+
+    // 👇 تعريف طوابير التركيز لكل حقل 👇
+    val focusName = remember { FocusRequester() }
+    val focusForm = remember { FocusRequester() }
+    val focusCompany = remember { FocusRequester() }
+    val focusBarcode = remember { FocusRequester() }
+    val focusPaid = remember { FocusRequester() }
+    val focusFree = remember { FocusRequester() }
+    val focusPurchase = remember { FocusRequester() }
+    val focusSale = remember { FocusRequester() }
+
     LaunchedEffect(Unit) {
-        delay(300) // تأخير بسيط لضمان فتح النافذة أولاً
-        focusRequester.requestFocus()
+        delay(300)
+        focusName.requestFocus() // التركيز على الاسم عند فتح النافذة
     }
 
     var name by remember { mutableStateOf("") }
@@ -222,19 +313,12 @@ fun AddPurchaseItemDialog(onDismiss: () -> Unit, onAdd: (PurchaseItemInput) -> U
     var freeUnits by remember { mutableStateOf("0") }
     var purchasePrice by remember { mutableStateOf("") }
     var salePrice by remember { mutableStateOf("") }
-
-    // حالة الباركود الجديد
     var barcode by remember { mutableStateOf("") }
-
-    // تاريخ افتراضي بعد سنة من الآن
     var expiryLong by remember { mutableStateOf(System.currentTimeMillis() + 365L * 24 * 60 * 60 * 1000) }
 
-    // مشغل الكاميرا لمسح الباركود أثناء إضافة الصنف
     val barcodeLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
         if (result.contents != null) {
-            // 👇 إضافة الاهتزاز هنا عند نجاح المسح 👇
             vibratePhone(context)
-
             barcode = result.contents
             Toast.makeText(context, "تم مسح الباركود: $barcode", Toast.LENGTH_SHORT).show()
         }
@@ -245,40 +329,52 @@ fun AddPurchaseItemDialog(onDismiss: () -> Unit, onAdd: (PurchaseItemInput) -> U
         title = { Text("إضافة صنف للفاتورة") },
         text = {
             Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .clickable(
+                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                        indication = null // 👈 لإلغاء تأثير الضغط الرمادي
+                    ) {
+                        focusManager.clearFocus() // 👈 يغلق الكيبورد عند الضغط في أي مساحة فارغة
+                    },
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                // 1. الاسم
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
                     label = { Text("اسم الدواء *") },
-                    modifier = Modifier.fillMaxWidth().focusRequester(focusRequester), // 👈 أضفنا هذا هنا
+                    modifier = Modifier.fillMaxWidth().focusRequester(focusName),
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                    keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) })
-                )
-                OutlinedTextField(
-                    value = form, onValueChange = { form = it }, label = { Text("الشكل (حب، شراب)") },
-                    modifier = Modifier.fillMaxWidth(), singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                    keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) })
-                )
-                OutlinedTextField(
-                    value = company, onValueChange = { company = it }, label = { Text("الشركة") },
-                    modifier = Modifier.fillMaxWidth(), singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                    keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) })
+                    keyboardActions = KeyboardActions(onNext = { focusForm.requestFocus() })
                 )
 
-                // 👇 حقل الباركود الجديد 👇
+                // 2. الشكل
+                OutlinedTextField(
+                    value = form, onValueChange = { form = it }, label = { Text("الشكل (حب، شراب)") },
+                    modifier = Modifier.fillMaxWidth().focusRequester(focusForm), singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                    keyboardActions = KeyboardActions(onNext = { focusCompany.requestFocus() })
+                )
+
+                // 3. الشركة
+                OutlinedTextField(
+                    value = company, onValueChange = { company = it }, label = { Text("الشركة") },
+                    modifier = Modifier.fillMaxWidth().focusRequester(focusCompany), singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                    keyboardActions = KeyboardActions(onNext = { focusBarcode.requestFocus() })
+                )
+
+                // 4. الباركود
                 OutlinedTextField(
                     value = barcode,
                     onValueChange = { barcode = it },
                     label = { Text("الباركود (اختياري)") },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().focusRequester(focusBarcode),
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                    keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+                    keyboardActions = KeyboardActions(onNext = { focusPaid.requestFocus() }),
                     trailingIcon = {
                         IconButton(onClick = {
                             val options = ScanOptions().apply {
@@ -293,48 +389,52 @@ fun AddPurchaseItemDialog(onDismiss: () -> Unit, onAdd: (PurchaseItemInput) -> U
                         }
                     }
                 )
-                // 👆 ----------------- 👆
 
+                // 5. الكمية المدفوعة والمجانية
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
-                        value = paidUnits, onValueChange = { paidUnits = it }, label = { Text("الكمية المدفوعة *") },
-                        modifier = Modifier.weight(1f),
+                        value = paidUnits, onValueChange = { paidUnits = it }, label = { Text("المدفوعة *") },
+                        modifier = Modifier.weight(1f).focusRequester(focusPaid),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
-                        keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Right) }), // ينتقل لليسار (لأننا بالعربي)
+                        keyboardActions = KeyboardActions(onNext = { focusFree.requestFocus() }),
                         singleLine = true
                     )
                     OutlinedTextField(
                         value = freeUnits, onValueChange = { freeUnits = it }, label = { Text("المجانية") },
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).focusRequester(focusFree),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
-                        keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+                        keyboardActions = KeyboardActions(onNext = { focusPurchase.requestFocus() }),
                         singleLine = true
                     )
                 }
 
+                // 6. سعر الشراء والبيع
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = purchasePrice, onValueChange = { purchasePrice = it }, label = { Text("سعر الشراء *") },
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).focusRequester(focusPurchase),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
-                        keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Right) }),
+                        keyboardActions = KeyboardActions(onNext = { focusSale.requestFocus() }),
                         singleLine = true
                     )
                     OutlinedTextField(
                         value = salePrice, onValueChange = { salePrice = it }, label = { Text("سعر البيع *") },
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).focusRequester(focusSale),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }), // يغلق الكيبورد عند الانتهاء
+                        keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                         singleLine = true
                     )
                 }
 
-                // استخدام منتقي التاريخ
+// 7. التاريخ
                 DatePickerField(
                     label = "تاريخ الصلاحية *",
                     initialDate = expiryLong,
                     onDateSelected = { expiryLong = it }
                 )
+                LaunchedEffect(Unit) {
+                    focusManager.clearFocus()
+                }
             }
         },
         confirmButton = {

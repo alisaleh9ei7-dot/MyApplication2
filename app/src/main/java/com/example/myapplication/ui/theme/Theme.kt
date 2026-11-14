@@ -15,46 +15,29 @@ private val LightColorScheme = lightColorScheme(
     primary = PrimaryLight,
     onPrimary = OnPrimaryLight,
     primaryContainer = PrimaryContainerLight,
-    onPrimaryContainer = OnPrimaryContainerLight,
-
     secondary = SecondaryLight,
     onSecondary = OnSecondaryLight,
-    secondaryContainer = SecondaryContainerLight,
-    onSecondaryContainer = OnSecondaryContainerLight,
-
     background = BackgroundLight,
     onBackground = OnBackgroundLight,
     surface = SurfaceLight,
     onSurface = OnSurfaceLight,
-    surfaceVariant = SurfaceVariantLight,
-
     error = ErrorRed
 )
 
 private val DarkColorScheme = darkColorScheme(
     primary = PrimaryDark,
     onPrimary = OnPrimaryDark,
-    primaryContainer = PrimaryContainerDark,
-    onPrimaryContainer = OnPrimaryContainerDark,
-
     secondary = SecondaryDark,
-    onSecondary = OnSecondaryDark,
-    secondaryContainer = SecondaryContainerDark,
-    onSecondaryContainer = OnSecondaryContainerDark,
-
     background = BackgroundDark,
     onBackground = OnBackgroundDark,
     surface = SurfaceDark,
     onSurface = OnSurfaceDark,
-    surfaceVariant = SurfaceVariantDark,
-
     error = ErrorRed
 )
 
 @Composable
 fun MyApplication2Theme(
-    // 👇 أجبرنا التطبيق على الوضع الفاتح (لإلغاء اللون الأسود المزعج)
-    darkTheme: Boolean = false,
+    darkTheme: Boolean = false, // نبقيه فاتحاً كما طلبت
     content: @Composable () -> Unit
 ) {
     val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
@@ -63,10 +46,9 @@ fun MyApplication2Theme(
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as Activity).window
-            // جعل شريط الحالة (الساعة والبطارية) بنفس لون الشريط العلوي
-            window.statusBarColor = colorScheme.primary.toArgb()
-            // جعل أيقونات الساعة والبطارية بيضاء (false تعني ليس داكناً)
-            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = false
+            // تلوين شريط الحالة العلوي بلون الخلفية الرمادي ليكون متصلاً
+            window.statusBarColor = colorScheme.background.toArgb()
+            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = true
         }
     }
 

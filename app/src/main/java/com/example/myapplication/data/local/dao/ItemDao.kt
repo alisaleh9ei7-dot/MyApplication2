@@ -15,7 +15,7 @@ interface ItemDao {
     @Query("SELECT * FROM items WHERE name = :name LIMIT 1")
     suspend fun getItemByName(name: String): ItemEntity?
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.IGNORE) // 👈 بدلاً من REPLACE
     suspend fun insertItems(items: List<ItemEntity>)
 
     @Update
@@ -43,4 +43,20 @@ interface ItemDao {
     // 👇 دالة تحديث الباركود الجديدة 👇
     @Query("UPDATE items SET barcode = :barcode WHERE itemId = :itemId")
     suspend fun updateBarcode(itemId: String, barcode: String)
+
+    // جلب الأصناف التي لديها دفعات منتهية الصلاحية (currentQty > 0)
+    @Query("""
+    SELECT DISTINCT i.* FROM items i 
+    INNER JOIN batches b ON i.itemId = b.itemId 
+    WHERE b.currentQty > 0 AND b.expiryDate < :today
+""")
+    suspend fun getItemsWithExpiredBatches(today: Long): List<ItemEntity>
+
+    // جلب الأصناف التي لديها دفعات تنتهي خلال الفترة القادمة
+    @Query("""
+    SELECT DISTINCT i.* FROM items i 
+    INNER JOIN batches b ON i.itemId = b.itemId 
+    WHERE b.currentQty > 0 AND b.expiryDate BETWEEN :today AND :futureDate
+""")
+    suspend fun getItemsWithExpiringBatches(today: Long, futureDate: Long): List<ItemEntity>
 }

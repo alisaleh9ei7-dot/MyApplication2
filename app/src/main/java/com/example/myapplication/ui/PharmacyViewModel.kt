@@ -9,6 +9,9 @@ import com.example.myapplication.data.local.dao.*
 import com.example.myapplication.data.local.entity.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -17,8 +20,6 @@ import androidx.paging.Pager
 import androidx.paging.PagingConfig
 import androidx.paging.PagingData
 import androidx.paging.cachedIn
-import com.example.myapplication.data.local.dao.CompanyDao
-import com.example.myapplication.data.local.entity.CompanyEntity
 import androidx.room.withTransaction
 
 // كلاس لحفظ إحصائيات لوحة التحكم
@@ -44,6 +45,19 @@ data class MonthlyReportStats(
     val netProfit: Double = 0.0
 )
 
+// 👇 هذا الكلاس كان مفقوداً في مشروعك وتمت إضافته هنا 👇
+data class PurchaseItemInput(
+    val name: String,
+    val form: String,
+    val company: String,
+    val paidUnits: Double,
+    val freeUnits: Double,
+    val purchasePrice: Double,
+    val salePrice: Double,
+    val expiryDate: Long,
+    val barcode: String? = null
+)
+
 class PharmacyViewModel(
     private val itemDao: ItemDao,
     private val batchDao: BatchDao,
@@ -55,8 +69,37 @@ class PharmacyViewModel(
     private val dashboardDao: DashboardDao,
     private val companyDao: CompanyDao,
     private val reportDao: ReportDao,
-    private val db: AppDatabase // 👈 أضفنا قاعدة البيانات هنا
+    private val db: AppDatabase
 ) : ViewModel() {
+
+    // --- التقارير الجديدة (الأبطال والديون) ---
+    private val _topSellingByQty = MutableStateFlow<List<MovementReportItem>>(emptyList())
+    val topSellingByQty: StateFlow<List<MovementReportItem>> = _topSellingByQty
+
+    private val _topSellingByValue = MutableStateFlow<List<MovementReportItem>>(emptyList())
+    val topSellingByValue: StateFlow<List<MovementReportItem>> = _topSellingByValue
+
+    private val _topProfit = MutableStateFlow<List<MovementReportItem>>(emptyList())
+    val topProfit: StateFlow<List<MovementReportItem>> = _topProfit
+
+    private val _supplierSummary = MutableStateFlow<List<SupplierSummary>>(emptyList())
+    val supplierSummary: StateFlow<List<SupplierSummary>> = _supplierSummary
+
+    fun loadAdvancedReports() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val byQty = reportDao.getTopSellingByQuantity()
+            val byValue = reportDao.getTopSellingByValue()
+            val byProfit = reportDao.getTopProfitByValue()
+            val suppliers = reportDao.getSupplierSummary()
+
+            withContext(Dispatchers.Main) {
+                _topSellingByQty.value = byQty
+                _topSellingByValue.value = byValue
+                _topProfit.value = byProfit
+                _supplierSummary.value = suppliers
+            }
+        }
+    }
 
     // --- التقارير ---
     private val _nearExpiryReport = MutableStateFlow<List<NearExpiryReportItem>>(emptyList())
@@ -178,10 +221,8 @@ class PharmacyViewModel(
                 chartData.add(DailySales(dayFormat, dayTotal))
             }
 
-            // --- جلب أحدث المبيعات ---
             val recent = dashboardDao.getRecentSales()
 
-            // --- تحديث الواجهة بكل البيانات ---
             withContext(Dispatchers.Main) {
                 _dashboardStats.value = stats
                 _weeklySalesData.value = chartData
@@ -195,20 +236,44 @@ class PharmacyViewModel(
     fun updateSearchQuery(query: String) { searchQuery.value = query }
 
     val items: StateFlow<List<ItemEntity>> = itemDao.getAllItems().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-    // قائمة الشركات للمنسدلة
-    val companies: StateFlow<List<CompanyEntity>> = companyDao.getAllCompanies()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val companies: StateFlow<List<CompanyEntity>> = companyDao.getAllCompanies().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val filteredItems: StateFlow<List<ItemEntity>> = itemDao.getAllItems().combine(searchQuery) { items, query ->
         if (query.isBlank()) items else items.filter { it.name.contains(query, true) || it.itemId.contains(query, true) }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // حالات جديدة لشاشة المخزون (الصلاحيات)
+    private val _expiringItems = MutableStateFlow<List<ItemEntity>>(emptyList())
+    val expiringItems: StateFlow<List<ItemEntity>> = _expiringItems
+
+    private val _expiredItems = MutableStateFlow<List<ItemEntity>>(emptyList())
+    val expiredItems: StateFlow<List<ItemEntity>> = _expiredItems
+
+    fun loadExpiryFilters() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val today = System.currentTimeMillis()
+            val futureDate = today + (90L * 24 * 60 * 60 * 1000) // 90 يوماً
+
+            val expired = itemDao.getItemsWithExpiredBatches(today)
+            val expiring = itemDao.getItemsWithExpiringBatches(today, futureDate)
+
+            withContext(Dispatchers.Main) {
+                _expiredItems.value = expired
+                _expiringItems.value = expiring
+            }
+        }
+    }
 
     // --- السلة ---
     private val _cartItems = MutableStateFlow<Map<ItemEntity, Int>>(emptyMap())
     val cartItems: StateFlow<Map<ItemEntity, Int>> = _cartItems
 
-    fun addToCart(item: ItemEntity, quantity: Int = 1) { val c = _cartItems.value.toMutableMap(); c[item] = (c[item] ?: 0) + quantity; _cartItems.value = c }
+    fun addToCart(item: ItemEntity, quantity: Int = 1) {
+        val c = _cartItems.value.toMutableMap()
+        c[item] = (c[item] ?: 0) + quantity
+        _cartItems.value = c
+    }
 
-    // 1. البحث عن دواء بالباركود (للوحة التحكم)
     fun getItemDetailsByBarcode(barcode: String, onResult: (ItemEntity?) -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
             val item = itemDao.getItemByBarcode(barcode)
@@ -216,7 +281,6 @@ class PharmacyViewModel(
         }
     }
 
-    // 2. إضافة دواء للسلة بالباركود (لشاشة المبيعات)
     fun addToCartByBarcode(barcode: String, onResult: (Boolean, String) -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
             val item = itemDao.getItemByBarcode(barcode)
@@ -235,13 +299,19 @@ class PharmacyViewModel(
         }
     }
 
-    fun removeFromCart(item: ItemEntity) { val c = _cartItems.value.toMutableMap(); c.remove(item); _cartItems.value = c }
+    fun removeFromCart(item: ItemEntity) {
+        val c = _cartItems.value.toMutableMap()
+        c.remove(item)
+        _cartItems.value = c
+    }
+
     fun clearCart() { _cartItems.value = emptyMap() }
 
-    // --- الدفعات والمبيعات والمصاريف والإعدادات والموردين ---
     fun getBatchesForItem(itemId: String) = batchDao.getAvailableBatchesForItem(itemId)
+    fun getPriceForItem(itemId: String) = batchDao.getAvailableBatchesForItem(itemId).map { batches ->
+        batches.firstOrNull()?.salePrice ?: 0.0
+    }
 
-    // جلب سجل المبيعات بنظام Paging مع دعم البحث والتحديث اللحظي
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val pagedSalesHistory: Flow<PagingData<SaleHistoryEntity>> = searchQuery
         .debounce(300)
@@ -258,25 +328,18 @@ class PharmacyViewModel(
         }
         .cachedIn(viewModelScope)
 
-    // دالة مساعدة لجلب سعر البيع للدواء (لأول دفعة متاحة)
-    fun getPriceForItem(itemId: String) = batchDao.getAvailableBatchesForItem(itemId).map { batches ->
-        batches.firstOrNull()?.salePrice ?: 0.0
-    }
-
     val expenses: StateFlow<List<ExpenseEntity>> = expenseDao.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val settings: StateFlow<List<SettingEntity>> = settingDao.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val supplierLedger: StateFlow<List<SupplierLedgerEntity>> = supplierLedgerDao.getAllLedger().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    // جلب أسماء المرضى للاقتراحات
-    val customerNames: StateFlow<List<String>> = saleDao.getAllCustomerNames()
+    // جلب أسماء الموردين الفريدين للقائمة المنسدلة
+    val supplierNames: StateFlow<List<String>> = supplierLedgerDao.getAllLedger()
+        .map { ledger -> ledger.map { it.supplierName }.distinct().sorted() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // جلب ملخص أدوية المريض
-    fun getPatientMedications(name: String): Flow<List<PatientMedicationSummary>> {
-        return saleDao.getPatientMedications(name)
-    }
+    val customerNames: StateFlow<List<String>> = saleDao.getAllCustomerNames().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // --- إدارة الموردين ---
+    fun getPatientMedications(name: String): Flow<List<PatientMedicationSummary>> = saleDao.getPatientMedications(name)
+
     fun getSupplierInvoices(name: String): Flow<List<SupplierLedgerEntity>> = supplierLedgerDao.getInvoicesBySupplier(name)
     fun deleteSupplier(name: String, onResult: (Boolean, String) -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -288,11 +351,10 @@ class PharmacyViewModel(
         viewModelScope.launch(Dispatchers.IO) { supplierLedgerDao.updateSupplier(oldName, newName, newNotes) }
     }
 
-    // --- أدوات المخزون ---
     fun updateReorderLevel(itemId: String, level: Double) { viewModelScope.launch(Dispatchers.IO) { itemDao.updateReorderLevel(itemId, level) } }
     fun updateSellingPrice(itemId: String, newPrice: Double) { viewModelScope.launch(Dispatchers.IO) { batchDao.updateSellingPriceForItem(itemId, newPrice) } }
     fun repairInventoryBalances(onSuccess: () -> Unit) { viewModelScope.launch(Dispatchers.IO) { itemDao.repairAllBalances(); withContext(Dispatchers.Main) { onSuccess() } } }
-    // دالة إتلاف دواء (تالف أو منتهي الصلاحية)
+
     fun writeOffStock(batchId: String, itemId: String, qtyToWriteOff: Double, reason: String, onResult: (Boolean, String) -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -306,13 +368,9 @@ class PharmacyViewModel(
                     return@launch
                 }
 
-                // 1. خصم الكمية من الدفعة
                 batchDao.deductBatchQuantity(batchId, qtyToWriteOff)
-
-                // 2. خصم الكمية من إجمالي الصنف
                 itemDao.deductItemStock(itemId, qtyToWriteOff)
 
-                // 3. تسجيل حركة مخزون (بدون التأثير على المبيعات والأرباح)
                 stockMovementDao.insertMovement(StockMovementEntity(
                     movementDate = System.currentTimeMillis(),
                     movementType = "إتلاف",
@@ -329,8 +387,6 @@ class PharmacyViewModel(
             }
         }
     }
-
-    // --- الإعدادات والمصاريف ---
     fun saveSetting(key: String, value: String) { viewModelScope.launch(Dispatchers.IO) { settingDao.upsert(SettingEntity(key, value, "تعديل من التطبيق")) } }
     fun addSetting(key: String, value: String, onResult: (Boolean) -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -338,12 +394,11 @@ class PharmacyViewModel(
             withContext(Dispatchers.Main) { onResult(result != -1L) }
         }
     }
+
     fun addExpense(amount: Double, category: String, description: String, dateLong: Long) {
         viewModelScope.launch(Dispatchers.IO) {
-            val latestId = expenseDao.getLatestExpenseId()
-            val nextNumber = if (latestId == null) 1 else (latestId.replace("EXP-", "").toIntOrNull() ?: 0) + 1
-            val newId = "EXP-" + String.format("%04d", nextNumber)
-            val monthKey = SimpleDateFormat("yyyy-MM", Locale.US).format(Date(dateLong)).toLongOrNull() ?: 0L
+            val newId = "EXP-" + UUID.randomUUID().toString().take(6)
+            val monthKey = SimpleDateFormat("yyyyMM", Locale.US).format(Date(dateLong)).toLongOrNull() ?: 0L
             expenseDao.insert(ExpenseEntity(newId, dateLong, category, description, amount, monthKey))
         }
     }
@@ -369,22 +424,19 @@ class PharmacyViewModel(
                 val invoice = db.withTransaction {
                     val now = System.currentTimeMillis()
                     val invoiceNumber = "INV-" + SimpleDateFormat("yyyyMMdd-HHmmssSSS", Locale.US).format(Date(now))
-                    val monthKey = SimpleDateFormat("yyyy-MM", Locale.US).format(Date(now)).toLongOrNull() ?: 0L
+                    val monthKey = SimpleDateFormat("yyyyMM", Locale.US).format(Date(now)).toLongOrNull() ?: 0L
 
                     for ((item, cartQty) in cart) {
                         var left = cartQty.toDouble()
 
-                        // جلب الدفعات الصالحة فقط (غير منتهية)
                         for (batch in batchDao.getSellableBatchesSync(item.itemId, now)) {
                             if (left <= 0.0) break
                             val take = minOf(batch.currentQty, left)
 
-                            // خصم ذري (آمن)
                             if (batchDao.deductIfAvailable(batch.batchId, take) != 1) {
                                 throw Exception("تغيّرت كمية ${item.name}، أعد المحاولة")
                             }
 
-                            // تسجيل الفاتورة
                             saleDao.insertSale(SaleHistoryEntity(
                                 saleDate = now, batchId = batch.batchId, legacyName = item.name,
                                 quantity = take, unitPrice = batch.salePrice, totalAmount = take * batch.salePrice,
@@ -394,7 +446,6 @@ class PharmacyViewModel(
                                 customerName = customerName, prescriptionImagePath = prescriptionPath
                             ))
 
-                            // تسجيل حركة المخزون
                             stockMovementDao.insertMovement(StockMovementEntity(
                                 movementDate = now, movementType = "بيع", batchId = batch.batchId,
                                 itemId = item.itemId, quantity = -take, reference = invoiceNumber, note = "بيع عبر التطبيق"
@@ -407,7 +458,6 @@ class PharmacyViewModel(
                             throw Exception("الكمية غير كافية أو منتهية الصلاحية: ${item.name}")
                         }
 
-                        // خصم الإجمالي من جدول الأصناف
                         itemDao.deductItemStock(item.itemId, cartQty.toDouble())
                     }
                     invoiceNumber
@@ -426,14 +476,32 @@ class PharmacyViewModel(
     fun deleteSaleAndRestock(saleId: Long, onSuccess: () -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val sale = saleDao.getSaleById(saleId)
-                if (sale != null && sale.batchId != null) {
-                    batchDao.restoreBatchQuantity(sale.batchId, sale.quantity)
-                    saleDao.deleteSaleMovement(sale.batchId, sale.invoiceRef)
-                    saleDao.deleteSaleById(saleId)
+                db.withTransaction { // 👈 تأمين العملية
+                    val sale = saleDao.getSaleById(saleId)
+                    if (sale != null && sale.batchId != null) {
+                        // 1. جلب الدفعة لمعرفة رقم الدواء (itemId)
+                        val batch = batchDao.getBatchById(sale.batchId)
+
+                        if (batch != null) {
+                            // 2. إرجاع الكمية إلى الدفعة (Batch)
+                            batchDao.restoreBatchQuantity(sale.batchId, sale.quantity)
+
+                            // 3. إرجاع الكمية إلى رصيد الدواء الإجمالي (Item) باستخدام batch.itemId
+                            itemDao.deductItemStock(batch.itemId, -sale.quantity)
+
+                            // 4. حذف حركة المخزون
+                            saleDao.deleteSaleMovement(sale.batchId, sale.invoiceRef)
+
+                            // 5. حذف الفاتورة
+                            saleDao.deleteSaleById(saleId)
+                        }
+                    }
                 }
                 withContext(Dispatchers.Main) { onSuccess() }
-            } catch (e: Exception) { e.printStackTrace() }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                // اختياري: يمكنك إضافة Toast هنا لإظهار الخطأ للمستخدم إذا أردت
+            }
         }
     }
 
@@ -458,7 +526,7 @@ class PharmacyViewModel(
                     totalAmount = newTotal,
                     profit = newProfit,
                     saleDate = newDate,
-                    month = SimpleDateFormat("yyyy-MM", Locale.US).format(Date(newDate)).toLongOrNull() ?: 0L
+                    month = SimpleDateFormat("yyyyMM", Locale.US).format(Date(newDate)).toLongOrNull() ?: 0L
                 ))
                 stockMovementDao.updateSaleMovementQuantity(batch.batchId, sale.invoiceRef, -newQty)
                 itemDao.repairSingleBalance(batch.itemId)
@@ -470,64 +538,71 @@ class PharmacyViewModel(
     // --- المشتريات ---
     fun processPurchase(supplierName: String, invoiceNumber: String, amountPaid: Double, items: List<PurchaseItemInput>, onSuccess: () -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
-            var totalInvoice = 0.0
-            for (item in items) {
-                val existingItem = itemDao.getItemByName(item.name)
-                var finalItemId = existingItem?.itemId
+            try {
+                db.withTransaction {
+                    var totalInvoice = 0.0
+                    for (item in items) {
+                        val existingItem = itemDao.getItemByName(item.name)
+                        var finalItemId = existingItem?.itemId
 
-                if (existingItem == null) {
-                    finalItemId = "ITEM-" + System.currentTimeMillis().toString().takeLast(4)
-                    itemDao.insertItems(listOf(ItemEntity(
-                        itemId = finalItemId,
-                        name = item.name,
-                        dosageForm = item.form,
-                        company = item.company,
-                        currentStock = 0.0,
-                        reorderLevel = 2.0,
-                        barcode = item.barcode
-                    )))
-                } else {
-                    if (item.barcode != null && existingItem.barcode == null) {
-                        itemDao.updateBarcode(finalItemId!!, item.barcode)
+                        if (existingItem == null) {
+                            finalItemId = "ITEM-" + UUID.randomUUID().toString().take(8)
+                            itemDao.insertItems(listOf(ItemEntity(
+                                itemId = finalItemId,
+                                name = item.name,
+                                dosageForm = item.form,
+                                company = item.company,
+                                currentStock = 0.0,
+                                reorderLevel = 2.0,
+                                barcode = item.barcode
+                            )))
+                        } else {
+                            if (item.barcode != null && existingItem.barcode == null) {
+                                itemDao.updateBarcode(finalItemId!!, item.barcode)
+                            }
+                        }
+
+                        val totalUnits = item.paidUnits + item.freeUnits
+                        val lineTotal = item.paidUnits * item.purchasePrice
+                        totalInvoice += lineTotal
+                        val effectiveUnitCost = if (totalUnits > 0) lineTotal / totalUnits else 0.0
+                        val offerString = if (item.freeUnits == 0.0) "${item.paidUnits.toInt()}+0" else "${item.paidUnits.toInt()}+${item.freeUnits.toInt()}"
+
+                        val matchingBatch = batchDao.getMatchingBatch(finalItemId ?: "", item.expiryDate, item.purchasePrice)
+
+                        if (matchingBatch != null) {
+                            val updatedBatch = matchingBatch.copy(
+                                currentQty = matchingBatch.currentQty + totalUnits,
+                                totalUnits = matchingBatch.totalUnits + totalUnits,
+                                dataStatus = "محدثة"
+                            )
+                            batchDao.updateBatch(updatedBatch)
+                        } else {
+                            val batchId = "BATCH-" + UUID.randomUUID().toString().take(8)
+                            batchDao.insertBatch(BatchEntity(
+                                batchId = batchId, itemId = finalItemId ?: "", drugName = item.name, dosageForm = item.form,
+                                company = item.company, originalOffer = offerString, currentQty = totalUnits, expiryDate = item.expiryDate,
+                                purchasePrice = item.purchasePrice, paidUnits = item.paidUnits, freeUnits = item.freeUnits,
+                                totalUnits = totalUnits, unitCost = effectiveUnitCost, salePrice = item.salePrice, clearancePrice = null,
+                                legacyBatchId = null, dataStatus = "جديدة"
+                            ))
+
+                            stockMovementDao.insertMovement(StockMovementEntity(
+                                movementDate = System.currentTimeMillis(), movementType = "شراء", batchId = batchId,
+                                itemId = finalItemId, quantity = totalUnits, reference = invoiceNumber, note = "شراء من المورد: $supplierName"
+                            ))
+                        }
+                        if (finalItemId != null) itemDao.deductItemStock(finalItemId, -totalUnits)
                     }
+                    addSupplierRecord(supplierName, "فاتورة رقم: $invoiceNumber", totalInvoice, amountPaid)
                 }
-
-                val totalUnits = item.paidUnits + item.freeUnits
-                val lineTotal = item.paidUnits * item.purchasePrice
-                totalInvoice += lineTotal
-                val effectiveUnitCost = if (totalUnits > 0) lineTotal / totalUnits else 0.0
-                val offerString = if (item.freeUnits == 0.0) "${item.paidUnits.toInt()}+0" else "${item.paidUnits.toInt()}+${item.freeUnits.toInt()}"
-                val matchingBatch = batchDao.getMatchingBatch(finalItemId ?: "", item.expiryDate, offerString)
-
-                if (matchingBatch != null) {
-                    batchDao.insertBatches(listOf(matchingBatch.copy(currentQty = matchingBatch.currentQty + totalUnits, totalUnits = matchingBatch.totalUnits + totalUnits, dataStatus = "محدثة")))
-                } else {
-                    val batchId = "$finalItemId|${SimpleDateFormat("yyyyMM", Locale.US).format(Date(item.expiryDate))}|${System.currentTimeMillis().toString().takeLast(3)}"
-                    batchDao.insertBatches(listOf(BatchEntity(batchId, finalItemId ?: "", item.name, item.form, item.company, offerString, totalUnits, item.expiryDate, item.purchasePrice, item.paidUnits, item.freeUnits, totalUnits, effectiveUnitCost, item.salePrice, null, null, "جديدة")))
-                    stockMovementDao.insertMovement(StockMovementEntity(
-                        movementDate = System.currentTimeMillis(), movementType = "شراء", batchId = batchId,
-                        itemId = finalItemId, quantity = totalUnits, reference = invoiceNumber, note = "شراء من المورد: $supplierName"
-                    ))
-                }
-                if (finalItemId != null) itemDao.deductItemStock(finalItemId, -totalUnits)
+                withContext(Dispatchers.Main) { onSuccess() }
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
-            addSupplierRecord(supplierName, "فاتورة رقم: $invoiceNumber", totalInvoice, amountPaid)
-            withContext(Dispatchers.Main) { onSuccess() }
         }
     }
 }
-
-data class PurchaseItemInput(
-    val name: String,
-    val form: String,
-    val company: String,
-    val paidUnits: Double,
-    val freeUnits: Double,
-    val purchasePrice: Double,
-    val salePrice: Double,
-    val expiryDate: Long,
-    val barcode: String? = null
-)
 
 class PharmacyViewModelFactory(
     private val itemDao: ItemDao,
@@ -540,14 +615,14 @@ class PharmacyViewModelFactory(
     private val dashboardDao: DashboardDao,
     private val companyDao: CompanyDao,
     private val reportDao: ReportDao,
-    private val db: AppDatabase // 👈 أضفناها هنا
+    private val db: AppDatabase
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(PharmacyViewModel::class.java)) {
             return PharmacyViewModel(
                 itemDao, batchDao, saleDao, stockMovementDao,
                 expenseDao, supplierLedgerDao, settingDao, dashboardDao,
-                companyDao, reportDao, db // 👈 نمررها هنا
+                companyDao, reportDao, db
             ) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")

@@ -5,9 +5,8 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -30,9 +29,14 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-// تصنيفات الفلترة
-enum class InventoryFilter {
-    ALL, LOW_STOCK, EXPIRING, EXPIRED
+// أنواع الترتيب والفلترة
+enum class SortOption(val title: String) {
+    ALPHABETICAL("أبجدي (أ-ي)"),
+    LOWEST_STOCK("الأقل كمية"),
+    HIGHEST_STOCK("الأكثر كمية"),
+    EXPIRING_SOON("قاربت على الانتهاء"),
+    EXPIRED("منتهية الصلاحية"),
+    LOW_STOCK("نواقص فقط")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -41,90 +45,91 @@ fun InventoryScreen(viewModel: PharmacyViewModel) {
     val context = LocalContext.current
     val allItems by viewModel.items.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
-    val filteredItems by viewModel.filteredItems.collectAsState()
 
-    // حالة الفلتر المختار
-    var selectedFilter by remember { mutableStateOf(InventoryFilter.ALL) }
+    val expiringItems by viewModel.expiringItems.collectAsState()
+    val expiredItems by viewModel.expiredItems.collectAsState()
 
-    // إحصائيات
+// تحميل بيانات الصلاحيات عند فتح الشاشة
+    LaunchedEffect(Unit) {
+        viewModel.loadExpiryFilters()
+    }
+
+    var selectedSort by remember { mutableStateOf(SortOption.ALPHABETICAL) }
+    var sortExpanded by remember { mutableStateOf(false) }
+
+    // حساب الإحصائيات
     val totalItems = allItems.size
     val totalQuantity = allItems.sumOf { it.currentStock }
-    val lowStockCount = allItems.count { it.currentStock <= it.reorderLevel }
 
-    // تطبيق الفلترة
-    val displayItems = when (selectedFilter) {
-        InventoryFilter.ALL -> filteredItems
-        InventoryFilter.LOW_STOCK -> filteredItems.filter { it.currentStock <= it.reorderLevel }
-        InventoryFilter.EXPIRING -> filteredItems // سنربطها بالصلاحية لاحقاً
-        InventoryFilter.EXPIRED -> filteredItems // سنربطها بالصلاحية لاحقاً
+    // ملاحظة: لحساب قيمة المخزون بالنت، نحتاج لجلب الدفعات لكل صنف (وهذا قد يكون ثقيلاً على الشاشة).
+    // كحل مؤقت، سنعرض قيمة المخزون الإجمالية من الـ ViewModel (التي تعتمد على الدفعات).
+    val dashboardStats by viewModel.dashboardStats.collectAsState()
+    val inventoryValue = dashboardStats.inventoryValue
+
+    // تطبيق الفلترة والترتيب
+    val displayItems = remember(allItems, searchQuery, selectedSort, expiringItems, expiredItems) {
+        // 1. البحث
+        var list = allItems.filter { item ->
+            item.name.contains(searchQuery, true) ||
+                    (item.company?.contains(searchQuery, true) == true)
+        }
+
+        // 2. تطبيق الفلتر
+        list = when (selectedSort) {
+            SortOption.ALPHABETICAL -> list.sortedBy { it.name }
+            SortOption.LOWEST_STOCK -> list.sortedBy { it.currentStock }
+            SortOption.HIGHEST_STOCK -> list.sortedByDescending { it.currentStock }
+            SortOption.LOW_STOCK -> list.filter { it.currentStock <= it.reorderLevel }.sortedBy { it.currentStock }
+
+            // 👇 استخدام القوائم الجديدة للصلاحيات 👇
+            SortOption.EXPIRING_SOON -> expiringItems.filter { item -> list.any { it.itemId == item.itemId } }
+            SortOption.EXPIRED -> expiredItems.filter { item -> list.any { it.itemId == item.itemId } }
+        }
+        list
     }
 
     Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
 
-        // --- قسم الإحصائيات العلوي ---
+        // --- 1. قسم الإحصائيات (3 بطاقات) ---
         Row(
             modifier = Modifier.fillMaxWidth().padding(16.dp, 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            InventoryStatCard(
-                title = "إجمالي الأصناف",
+             InventoryStatCard(
+                title = "الأصناف",
                 value = totalItems.toString(),
                 icon = Icons.Default.Inventory,
-                iconColor = Color(0xFF2563EB),
+                iconColor = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.weight(1f)
             )
             InventoryStatCard(
-                title = "إجمالي الكميات",
+                title = "الكميات",
                 value = String.format(Locale.US, "%.0f", totalQuantity),
                 icon = Icons.Default.ShoppingCart,
-                iconColor = Color(0xFF16A34A),
+                iconColor = Color(0xFF3D956B),
+                modifier = Modifier.weight(1f)
+            )
+            InventoryStatCard(
+                title = "قيمة النت",
+                value = String.format(Locale.US, "%.0f", inventoryValue),
+                icon = Icons.Default.MonetizationOn,
+                iconColor = Color(0xFFE8A23A),
                 modifier = Modifier.weight(1f)
             )
         }
 
-        // --- أزرار الفلترة (Chips) ---
-        ScrollableTabRow(
-            selectedTabIndex = selectedFilter.ordinal,
-            edgePadding = 16.dp,
-            containerColor = MaterialTheme.colorScheme.background,
-            divider = {},
-            indicator = {}
-        ) {
-            FilterChip(
-                selected = selectedFilter == InventoryFilter.ALL,
-                onClick = { selectedFilter = InventoryFilter.ALL },
-                label = { Text("الكل ($totalItems)") },
-                modifier = Modifier.padding(end = 8.dp)
-            )
-            FilterChip(
-                selected = selectedFilter == InventoryFilter.LOW_STOCK,
-                onClick = { selectedFilter = InventoryFilter.LOW_STOCK },
-                label = { Text("قليلة ($lowStockCount)", color = if (lowStockCount > 0) Color.Red else Color.Unspecified) },
-                modifier = Modifier.padding(end = 8.dp)
-            )
-            FilterChip(
-                selected = selectedFilter == InventoryFilter.EXPIRING,
-                onClick = { selectedFilter = InventoryFilter.EXPIRING },
-                label = { Text("قاربت") },
-                modifier = Modifier.padding(end = 8.dp)
-            )
-            FilterChip(
-                selected = selectedFilter == InventoryFilter.EXPIRED,
-                onClick = { selectedFilter = InventoryFilter.EXPIRED },
-                label = { Text("منتهية") }
-            )
-        }
-
-        // --- شريط البحث ---
+// --- 2. شريط البحث والفلترة ---
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // البحث (يأخذ مساحة أكبر)
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { viewModel.updateSearchQuery(it) },
-                placeholder = { Text("بحث في المخزون...", fontSize = 14.sp) },
-                modifier = Modifier.weight(1f),
+                placeholder = { Text("بحث بالاسم أو الشركة...", fontSize = 12.sp) },
+                modifier = Modifier.weight(1.5f), // 👈 وزن أكبر
                 singleLine = true,
                 shape = RoundedCornerShape(12.dp),
                 colors = OutlinedTextFieldDefaults.colors(
@@ -140,31 +145,27 @@ fun InventoryScreen(viewModel: PharmacyViewModel) {
                     }
                 }
             )
-            Spacer(modifier = Modifier.width(8.dp))
-            // زر إصلاح الأرصدة
-            IconButton(
-                onClick = {
-                    viewModel.repairInventoryBalances {
-                        Toast.makeText(context, "تم إصلاح الأرصدة بنجاح!", Toast.LENGTH_SHORT).show()
-                    }
-                },
-                modifier = Modifier.background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
-            ) {
-                Icon(Icons.Default.Build, contentDescription = "إصلاح الأرصدة", tint = MaterialTheme.colorScheme.primary)
-            }
+
+            // القائمة المنسدلة (تأخذ مساحة أقل)
+            FilterDropdown(
+                items = SortOption.values().toList(),
+                selected = selectedSort,
+                onSelected = { selectedSort = it },
+                itemLabel = { it.title },
+                modifier = Modifier.weight(1f), // 👈 وزن أقل، وبدون عرض ثابت
+                label = null // 👈 إزالة التسمية لتوفير المساحة
+            )
         }
 
-        // --- شبكة الأصناف (Grid) ---
+        // --- 3. قائمة الأصناف (بعمود واحد) ---
         if (displayItems.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("لا توجد أصناف مطابقة", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         } else {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2), // عمودين
+            LazyColumn(
                 contentPadding = PaddingValues(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(displayItems, key = { it.itemId }) { item ->
                     InventoryItemCard(item = item, viewModel = viewModel)
@@ -173,7 +174,6 @@ fun InventoryScreen(viewModel: PharmacyViewModel) {
         }
     }
 }
-
 @Composable
 fun InventoryItemCard(item: ItemEntity, viewModel: PharmacyViewModel) {
     val context = LocalContext.current
@@ -184,123 +184,160 @@ fun InventoryItemCard(item: ItemEntity, viewModel: PharmacyViewModel) {
         remember { mutableStateOf(emptyList<BatchEntity>()) }
     }
 
+    val displayBatches by viewModel.getBatchesForItem(item.itemId).collectAsState(initial = emptyList())
+    val salePrice = displayBatches.firstOrNull()?.salePrice ?: 0.0
+    val purchasePrice = displayBatches.firstOrNull()?.purchasePrice ?: 0.0
+    val nearestExpiry = displayBatches.minByOrNull { it.expiryDate }?.expiryDate
+
     var showReorderDialog by remember { mutableStateOf(false) }
     var showPriceDialog by remember { mutableStateOf(false) }
     var batchToWriteOff by remember { mutableStateOf<BatchEntity?>(null) }
 
-    val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+    val dateFormatFull = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+    val dateFormatShort = SimpleDateFormat("MM-yyyy", Locale.US)
+
     val isLowStock = item.currentStock <= item.reorderLevel
+    val isExpired = nearestExpiry != null && nearestExpiry < System.currentTimeMillis()
+
+    // لون الشريط الجانبي
+    val statusColor = when {
+        item.currentStock == 0.0 -> Color(0xFFD65353)
+        isExpired -> Color(0xFFD65353)
+        isLowStock -> Color(0xFFE8A23A)
+        else -> Color(0xFF3D956B)
+    }
 
     Card(
-        modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
+        modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        shape = RoundedCornerShape(16.dp),
-        elevation = CardDefaults.cardElevation(2.dp)
+        shape = RoundedCornerShape(12.dp),
+        elevation = CardDefaults.cardElevation(1.dp)
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
+        Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+            // 👇 الشريط الملون (يمين) 👇
+            Box(modifier = Modifier.width(5.dp).fillMaxHeight().background(statusColor))
 
-            // رأس البطاقة: اسم الصنف والشركة
-            Text(
-                text = item.name,
-                fontWeight = FontWeight.Bold,
-                fontSize = 15.sp,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = item.company ?: "غير محدد",
-                fontSize = 11.sp,
-                color = Color.Gray,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-            HorizontalDivider(color = Color.LightGray.copy(alpha = 0.5f))
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // بيانات المخزون
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Column {
-                    Text("الرصيد", fontSize = 10.sp, color = Color.Gray)
-                    Text(
-                        text = String.format(Locale.US, "%.0f", item.currentStock),
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp,
-                        color = if (isLowStock) Color.Red else MaterialTheme.colorScheme.primary
-                    )
-                }
-                Column(horizontalAlignment = Alignment.End) {
-                    Text("حد الطلب", fontSize = 10.sp, color = Color.Gray)
-                    Text(
-                        text = String.format(Locale.US, "%.0f", item.reorderLevel),
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // زر التفاصيل/الطي
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                Text(if (expanded) "إخفاء الدفعات" else "عرض الدفعات", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
-                Icon(
-                    imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(16.dp)
-                )
-            }
-
-            // --- القسم القابل للتوسيع (الدفعات) ---
-            AnimatedVisibility(visible = expanded) {
-                Column(modifier = Modifier.padding(top = 12.dp)) {
-                    HorizontalDivider(modifier = Modifier.padding(bottom = 8.dp))
-
-                    // أزرار التحكم
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Button(
-                            onClick = { showReorderDialog = true },
-                            modifier = Modifier.weight(1f).height(32.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEEF2FF)),
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(0.dp)
-                        ) {
-                            Text("حد الطلب", fontSize = 10.sp, color = Color(0xFF3730A3))
-                        }
-                        Button(
-                            onClick = { showPriceDialog = true },
-                            modifier = Modifier.weight(1f).height(32.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFECFDF5)),
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(0.dp)
-                        ) {
-                            Text("تعديل السعر", fontSize = 10.sp, color = Color(0xFF047857))
-                        }
+            // 👇 محتوى البطاقة (داخل Column) 👇
+            Column(modifier = Modifier.padding(12.dp).weight(1f)) {
+                // السطر الأول: الاسم (يمين) + الصلاحية (يسار)
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = item.name,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "${item.company ?: "-"} | ${item.dosageForm ?: "-"}",
+                            fontSize = 11.sp,
+                            color = Color.Gray,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    if (nearestExpiry != null) {
+                        val expiryColor = if (isExpired) Color.Red else Color(0xFFE8A23A)
+                        Text(
+                            text = "صلاحية: ${dateFormatShort.format(Date(nearestExpiry))}",
+                            fontSize = 10.sp,
+                            color = expiryColor,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(start = 8.dp)
+                        )
+                    }
+                }
 
-                    if (batches.isEmpty()) {
-                        Text("لا توجد دفعات مسجلة.", fontSize = 11.sp, color = Color.Red)
-                    } else {
-                        batches.forEach { batch ->
-                            Card(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.background)
-                            ) {
-                                Column(modifier = Modifier.padding(8.dp)) {
-                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                        val expiryStr = if (batch.expiryDate > 0) dateFormat.format(Date(batch.expiryDate)) else "غير محدد"
-                                        Text("صلاحية: $expiryStr", fontSize = 10.sp, color = if (batch.expiryDate < System.currentTimeMillis()) Color.Red else Color.DarkGray)
-                                        Text("كمية: ${batch.currentQty}", fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                                    }
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                        Text("السعر: ${batch.salePrice}", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(6.dp))
+                HorizontalDivider(color = Color.LightGray.copy(alpha = 0.3f))
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // السطر الثاني: الكمية، الطلب، الأسعار (كلها في سطر واحد)
+                Row(modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded }, horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column {
+                        Text("الرصيد", fontSize = 9.sp, color = Color.Gray)
+                        Text(
+                            text = String.format(Locale.US, "%.0f", item.currentStock),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                            color = if (isLowStock) Color.Red else MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Column {
+                        Text("الطلب", fontSize = 9.sp, color = Color.Gray)
+                        Text(
+                            text = String.format(Locale.US, "%.0f", item.reorderLevel),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    Column {
+                        Text("النت", fontSize = 9.sp, color = Color.Gray)
+                        Text(
+                            text = String.format(Locale.US, "%.0f", purchasePrice),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = Color(0xFFE8A23A)
+                        )
+                    }
+                    Column {
+                        Text("البيع", fontSize = 9.sp, color = Color.Gray)
+                        Text(
+                            text = String.format(Locale.US, "%.0f", salePrice),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = Color(0xFF3D956B)
+                        )
+                    }
+                    Icon(
+                        imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                // --- القسم القابل للتوسيع (الدفعات) ---
+                AnimatedVisibility(visible = expanded) {
+                    Column(modifier = Modifier.padding(top = 12.dp)) {
+                        HorizontalDivider(modifier = Modifier.padding(bottom = 8.dp))
+
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = { showReorderDialog = true },
+                                modifier = Modifier.weight(1f).height(32.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(0.dp)
+                            ) { Text("حد الطلب", fontSize = 11.sp) }
+
+                            OutlinedButton(
+                                onClick = { showPriceDialog = true },
+                                modifier = Modifier.weight(1f).height(32.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(0.dp)
+                            ) { Text("تعديل السعر", fontSize = 11.sp) }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        if (batches.isEmpty()) {
+                            Text("لا توجد دفعات.", fontSize = 11.sp, color = Color.Red)
+                        } else {
+                            batches.forEach { batch ->
+                                Card(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.background)
+                                ) {
+                                    Row(modifier = Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                        Column {
+                                            val expiryStr = if (batch.expiryDate > 0) dateFormatFull.format(Date(batch.expiryDate)) else "-"
+                                            Text("صلاحية: $expiryStr", fontSize = 10.sp, color = if (batch.expiryDate < System.currentTimeMillis()) Color.Red else Color.DarkGray)
+                                            Text("الكمية: ${batch.currentQty} | السعر: ${batch.salePrice}", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                                        }
                                         IconButton(
                                             onClick = { batchToWriteOff = batch },
                                             modifier = Modifier.size(24.dp).background(Color(0xFFFFEBEE), RoundedCornerShape(4.dp))
@@ -313,33 +350,18 @@ fun InventoryItemCard(item: ItemEntity, viewModel: PharmacyViewModel) {
                         }
                     }
                 }
-            }
-        }
-    }
+            } // 👈 يغلق Column (محتوى البطاقة)
+        } // 👈 يغلق Row (الذي يحتوي على الشرائط والمحتوى)
+    } // 👈 يغلق Card
 
-    // --- النوافذ المنبثقة (Dialogs) ---
+    // --- النوافذ المنبثقة (يجب أن تكون داخل الدالة وخارج Card) ---
     if (showReorderDialog) {
         var newLevel by remember { mutableStateOf(item.reorderLevel.toString()) }
         AlertDialog(
             onDismissRequest = { showReorderDialog = false },
             title = { Text("تعديل حد إعادة الطلب") },
-            text = {
-                OutlinedTextField(
-                    value = newLevel,
-                    onValueChange = { newLevel = it },
-                    label = { Text("الحد الجديد") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                )
-            },
-            confirmButton = {
-                Button(onClick = {
-                    val level = newLevel.toDoubleOrNull()
-                    if (level != null) {
-                        viewModel.updateReorderLevel(item.itemId, level)
-                        showReorderDialog = false
-                    }
-                }) { Text("حفظ") }
-            },
+            text = { OutlinedTextField(value = newLevel, onValueChange = { newLevel = it }, label = { Text("الحد الجديد") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)) },
+            confirmButton = { Button(onClick = { val level = newLevel.toDoubleOrNull(); if (level != null) { viewModel.updateReorderLevel(item.itemId, level); showReorderDialog = false } }) { Text("حفظ") } },
             dismissButton = { TextButton(onClick = { showReorderDialog = false }) { Text("إلغاء") } }
         )
     }
@@ -348,25 +370,9 @@ fun InventoryItemCard(item: ItemEntity, viewModel: PharmacyViewModel) {
         var newPrice by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { showPriceDialog = false },
-            title = { Text("تعديل سعر البيع (لكل الدفعات)") },
-            text = {
-                OutlinedTextField(
-                    value = newPrice,
-                    onValueChange = { newPrice = it },
-                    label = { Text("السعر الجديد") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
-                )
-            },
-            confirmButton = {
-                Button(onClick = {
-                    val price = newPrice.toDoubleOrNull()
-                    if (price != null && price >= 0) {
-                        viewModel.updateSellingPrice(item.itemId, price)
-                        Toast.makeText(context, "تم تحديث سعر البيع", Toast.LENGTH_SHORT).show()
-                        showPriceDialog = false
-                    }
-                }) { Text("حفظ") }
-            },
+            title = { Text("تعديل سعر البيع") },
+            text = { OutlinedTextField(value = newPrice, onValueChange = { newPrice = it }, label = { Text("السعر الجديد") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)) },
+            confirmButton = { Button(onClick = { val price = newPrice.toDoubleOrNull(); if (price != null && price >= 0) { viewModel.updateSellingPrice(item.itemId, price); Toast.makeText(context, "تم التحديث", Toast.LENGTH_SHORT).show(); showPriceDialog = false } }) { Text("حفظ") } },
             dismissButton = { TextButton(onClick = { showPriceDialog = false }) { Text("إلغاء") } }
         )
     }
@@ -374,65 +380,92 @@ fun InventoryItemCard(item: ItemEntity, viewModel: PharmacyViewModel) {
     if (batchToWriteOff != null) {
         var writeOffQty by remember { mutableStateOf("") }
         var reason by remember { mutableStateOf("تالف") }
-
         AlertDialog(
             onDismissRequest = { batchToWriteOff = null },
             icon = { Icon(Icons.Default.Warning, contentDescription = null, tint = Color.Red) },
             title = { Text("إتلاف دواء") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("الكمية المتوفرة في الدفعة: ${batchToWriteOff!!.currentQty}", fontWeight = FontWeight.Bold)
-                    OutlinedTextField(
-                        value = writeOffQty,
-                        onValueChange = { writeOffQty = it },
-                        label = { Text("الكمية المراد إتلافها") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = reason,
-                        onValueChange = { reason = it },
-                        label = { Text("سبب الإتلاف") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    Text("المتوفر: ${batchToWriteOff!!.currentQty}", fontWeight = FontWeight.Bold)
+                    OutlinedTextField(value = writeOffQty, onValueChange = { writeOffQty = it }, label = { Text("الكمية") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                    OutlinedTextField(value = reason, onValueChange = { reason = it }, label = { Text("السبب") })
                 }
             },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val qty = writeOffQty.toDoubleOrNull()
-                        if (qty != null && qty > 0) {
-                            viewModel.writeOffStock(batchToWriteOff!!.batchId, item.itemId, qty, reason) { success, message ->
-                                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-                                if (success) batchToWriteOff = null
-                            }
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
-                ) { Text("تأكيد الإتلاف") }
-            },
+            confirmButton = { Button(onClick = { val qty = writeOffQty.toDoubleOrNull(); if (qty != null && qty > 0) { viewModel.writeOffStock(batchToWriteOff!!.batchId, item.itemId, qty, reason) { success, message -> Toast.makeText(context, message, Toast.LENGTH_SHORT).show(); if (success) batchToWriteOff = null } } }, colors = ButtonDefaults.buttonColors(containerColor = Color.Red)) { Text("تأكيد") } },
             dismissButton = { TextButton(onClick = { batchToWriteOff = null }) { Text("إلغاء") } }
         )
     }
 }
 
-@Composable
-fun InventoryStatCard(title: String, value: String, icon: androidx.compose.ui.graphics.vector.ImageVector, iconColor: Color, modifier: Modifier = Modifier) {
-    Card(
-        modifier = modifier,
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(1.dp)
-    ) {
-        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(modifier = Modifier.background(iconColor.copy(alpha = 0.1f), RoundedCornerShape(8.dp)).padding(8.dp)) {
-                Icon(icon, contentDescription = null, tint = iconColor, modifier = Modifier.size(20.dp))
-            }
-            Spacer(modifier = Modifier.width(8.dp))
-            Column {
+    @Composable
+    fun InventoryStatCard(title: String, value: String, icon: androidx.compose.ui.graphics.vector.ImageVector, iconColor: Color, modifier: Modifier = Modifier) {
+        Card(
+            modifier = modifier,
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(1.dp)
+        ) {
+            Column(modifier = Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(modifier = Modifier.background(iconColor.copy(alpha = 0.1f), RoundedCornerShape(8.dp)).padding(6.dp)) {
+                    Icon(icon, contentDescription = null, tint = iconColor, modifier = Modifier.size(18.dp))
+                }
+                Spacer(modifier = Modifier.height(4.dp))
                 Text(title, fontSize = 10.sp, color = Color.Gray)
                 Text(value, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
             }
         }
     }
-}
+
+    @Composable
+    fun <T> FilterDropdown(
+        items: List<T>,
+        selected: T,
+        onSelected: (T) -> Unit,
+        itemLabel: (T) -> String,
+        modifier: Modifier = Modifier,
+        label: String? = null
+    ) {
+        var expanded by remember { mutableStateOf(false) }
+
+        Box(modifier = modifier) {
+            OutlinedTextField(
+                value = itemLabel(selected),
+                onValueChange = {},
+                readOnly = true,
+                label = label?.let { { Text(it) } },
+                singleLine = true,
+                shape = RoundedCornerShape(12.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                    focusedContainerColor = MaterialTheme.colorScheme.surface
+                ),
+                trailingIcon = {
+                    Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            // الطبقة الشفافة لالتقاط الضغط
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clickable { expanded = true }
+            )
+
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                modifier = Modifier.background(MaterialTheme.colorScheme.surface)
+            ) {
+                items.forEach { item ->
+                    DropdownMenuItem(
+                        text = { Text(itemLabel(item), fontSize = 12.sp) },
+                        onClick = {
+                            onSelected(item)
+                            expanded = false
+                        }
+                    )
+                }
+            }
+        }
+    }

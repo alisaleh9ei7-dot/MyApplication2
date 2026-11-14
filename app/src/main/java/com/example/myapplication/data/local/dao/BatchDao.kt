@@ -15,8 +15,8 @@ interface BatchDao {
     @Query("SELECT * FROM batches WHERE batchId = :batchId")
     suspend fun getBatchById(batchId: String): BatchEntity?
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertBatches(batches: List<BatchEntity>)
+    @Insert(onConflict = OnConflictStrategy.IGNORE) // 👈 بدلاً من REPLACE
+    suspend fun insertBatch(batch: BatchEntity)
 
     @Query("UPDATE batches SET currentQty = currentQty - :qty WHERE batchId = :batchId")
     suspend fun deductBatchQuantity(batchId: String, qty: Double)
@@ -24,8 +24,8 @@ interface BatchDao {
     @Query("UPDATE batches SET currentQty = currentQty + :qty WHERE batchId = :batchId")
     suspend fun restoreBatchQuantity(batchId: String, qty: Double)
 
-    @Query("SELECT * FROM batches WHERE itemId = :itemId AND expiryDate = :expiryDate AND originalOffer = :offer LIMIT 1")
-    suspend fun getMatchingBatch(itemId: String, expiryDate: Long, offer: String): BatchEntity?
+    @Query("SELECT * FROM batches WHERE itemId = :itemId AND expiryDate = :expiryDate AND purchasePrice = :purchasePrice LIMIT 1")
+    suspend fun getMatchingBatch(itemId: String, expiryDate: Long, purchasePrice: Double): BatchEntity?
 
     @Query("SELECT SUM(currentQty) FROM batches WHERE itemId = :itemId")
     suspend fun getTotalBatchQuantity(itemId: String): Double?
@@ -38,4 +38,7 @@ interface BatchDao {
 
     @Query("UPDATE batches SET currentQty = currentQty - :qty WHERE batchId = :batchId AND currentQty >= :qty")
     suspend fun deductIfAvailable(batchId: String, qty: Double): Int
+
+    @Update
+    suspend fun updateBatch(batch: BatchEntity)
 }

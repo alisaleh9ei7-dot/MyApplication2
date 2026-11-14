@@ -156,15 +156,61 @@ fun DashboardScreen(viewModel: PharmacyViewModel, onNavigate: (String) -> Unit =
             QuickActionCard("شراء جديد", Icons.Default.AddShoppingCart, MaterialTheme.colorScheme.secondary) { onNavigate("purchases") }
         }
 
-        // 4. نبض اليوم (الإحصائيات)
+// 4. نبض اليوم (الإحصائيات)
         item(span = { GridItemSpan(maxLineSpan) }) {
             Text("📊 نبض اليوم", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.padding(top = 8.dp))
         }
-        item { DashboardCard("مبيعات اليوم", String.format(Locale.US, "%.0f", stats.todaySales), MaterialTheme.colorScheme.primary) }
-        item { DashboardCard("أرباح اليوم", String.format(Locale.US, "%.0f", stats.todayProfit), Color(0xFF16A34A)) }
-        item { DashboardCard("قيمة المخزون", String.format(Locale.US, "%.0f", stats.inventoryValue), Color(0xFF8B5CF6)) }
-        item { DashboardCard("مصاريف الشهر", String.format(Locale.US, "%.0f", stats.monthExpenses), Color(0xFFDC2626)) }
 
+// مبيعات اليوم
+        item {
+            DashboardCard(
+                title = "مبيعات اليوم",
+                value = String.format(Locale.US, "%.0f", stats.todaySales),
+                color = MaterialTheme.colorScheme.primary,
+                icon = Icons.Default.BarChart
+            )
+        }
+
+// أرباح اليوم (الأساسية)
+        item {
+            DashboardCard(
+                title = "أرباح اليوم",
+                value = String.format(Locale.US, "%.0f", stats.todayProfit),
+                color = Color(0xFF3D956B),
+                icon = Icons.Default.TrendingUp
+            )
+        }
+
+// 👇 أرباح العروض (الجديدة) 👇
+        item {
+            DashboardCard(
+                title = "أرباح العروض",
+                value = String.format(Locale.US, "%.0f", stats.monthOfferProfit),
+                color = Color(0xFFE8A23A),
+                icon = Icons.Default.CardGiftcard
+            )
+        }
+
+// قيمة المخزون
+        item {
+            DashboardCard(
+                title = "قيمة المخزون",
+                value = String.format(Locale.US, "%.0f", stats.inventoryValue),
+                color = Color(0xFF7986CB),
+                icon = Icons.Default.Inventory
+            )
+        }
+
+// مصاريف الشهر
+        item {
+            DashboardCard(
+                title = "مصاريف الشهر",
+                value = String.format(Locale.US, "%.0f", stats.monthExpenses),
+                color = Color(0xFFD65353),
+                icon = Icons.Default.Wallet
+            )
+        }
+a
         // 5. الرسم البياني
         item(span = { GridItemSpan(maxLineSpan) }) {
             Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), elevation = CardDefaults.cardElevation(1.dp)) {
@@ -249,12 +295,44 @@ fun QuickActionCard(title: String, icon: androidx.compose.ui.graphics.vector.Ima
 }
 
 @Composable
-fun DashboardCard(title: String, value: String, color: Color) {
-    Card(shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), elevation = CardDefaults.cardElevation(1.dp)) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Text(title, fontSize = 11.sp, color = Color.Gray, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(value, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+fun DashboardCard(
+    title: String,
+    value: String,
+    color: Color,
+    icon: androidx.compose.ui.graphics.vector.ImageVector // 👈 أضفنا الأيقونة هنا
+) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(2.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp).fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // الدائرة الملونة التي تحتوي على الأيقونة
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(color.copy(alpha = 0.1f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = color,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            // النص والرقم
+            Column {
+                Text(title, fontSize = 11.sp, color = Color.Gray, maxLines = 1)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(value, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = color, maxLines = 1)
+            }
         }
     }
 }
@@ -263,29 +341,54 @@ fun DashboardCard(title: String, value: String, color: Color) {
 fun BarChart(data: List<DailySales>) {
     val maxAmount = data.maxOf { it.amount }.coerceAtLeast(1.0)
 
-    // 👇 استخراج الألوان هنا (في بيئة Composable) قبل الدخول إلى Canvas
+    // استخراج الألوان هنا لأن Canvas لا يدعم MaterialTheme مباشرة
     val barColor = MaterialTheme.colorScheme.primary
-    val textColor = Color.Gray.toArgb()
+    val textColor = Color.Gray
+    val labelColor = Color(0xFF252B3A)
 
-    Canvas(modifier = Modifier.fillMaxWidth().height(150.dp)) {
-        val barWidth = size.width / (data.size * 2)
-        val spacing = barWidth / 2
+    Canvas(modifier = Modifier.fillMaxWidth().height(180.dp)) {
+        val barWidth = size.width / (data.size * 1.5f)
+        val spacing = barWidth * 0.5f
+        val textPaint = android.graphics.Paint().apply {
+            color = textColor.toArgb()
+            textSize = 32f
+            textAlign = android.graphics.Paint.Align.CENTER
+            isFakeBoldText = true
+        }
+        val labelPaint = android.graphics.Paint().apply {
+            color = labelColor.toArgb()
+            textSize = 30f
+            textAlign = android.graphics.Paint.Align.CENTER
+        }
+
         data.forEachIndexed { index, item ->
-            val barHeight = ((item.amount / maxAmount) * size.height * 0.8f).toFloat()
+            val barHeight = ((item.amount / maxAmount) * size.height * 0.7f).toFloat()
+            val x = index * (barWidth + spacing) + spacing + (barWidth / 2)
+            val y = size.height - barHeight - 40f
 
+            // 1. رسم العمود
             drawRoundRect(
-                color = barColor, // 👈 نستخدم المتغير هنا
-                topLeft = Offset(x = index * (barWidth + spacing) + spacing, y = size.height - barHeight - 30f),
+                color = barColor,
+                topLeft = Offset(x - (barWidth / 2), y),
                 size = Size(width = barWidth, height = barHeight),
                 cornerRadius = CornerRadius(8f, 8f)
             )
 
+            // 2. رسم الرقم فوق العمود (القيمة)
+            val valueText = String.format(Locale.US, "%.0f", item.amount)
             drawContext.canvas.nativeCanvas.drawText(
-                item.dayName, index * (barWidth + spacing) + spacing + (barWidth / 4), size.height - 5f,
-                android.graphics.Paint().apply {
-                    color = textColor // 👈 نستخدم المتغير هنا
-                    textSize = 30f
-                }
+                valueText,
+                x,
+                y - 10f, // فوق العمود بقليل
+                textPaint
+            )
+
+            // 3. رسم اسم اليوم تحت العمود
+            drawContext.canvas.nativeCanvas.drawText(
+                item.dayName,
+                x,
+                size.height - 5f,
+                labelPaint
             )
         }
     }

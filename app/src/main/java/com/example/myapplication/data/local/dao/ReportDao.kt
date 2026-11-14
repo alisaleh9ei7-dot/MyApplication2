@@ -29,6 +29,13 @@ data class ExpiredReportItem(
     val daysExpired: Int
 )
 
+data class SupplierSummary(
+    val supplierName: String,
+    val totalPurchases: Double,
+    val totalPaid: Double,
+    val totalDebt: Double
+)
+
 @Dao
 interface ReportDao {
     // تقرير الدفعات القريبة من الانتهاء (خلال 90 يوماً)
@@ -64,4 +71,42 @@ interface ReportDao {
     // استعلام لحساب إجمالي المصاريف في فترة معينة
     @Query("SELECT SUM(amount) FROM expenses WHERE expenseDate BETWEEN :start AND :end")
     suspend fun getExpensesBetween(start: Long, end: Long): Double?
+
+    // 1. الأبطال: الأفضل مبيعاً (بالكمية) على الإطلاق
+    @Query("""
+    SELECT legacyName as name, SUM(quantity) as qty, SUM(totalAmount) as sales, SUM(profit) as profit 
+    FROM sales_history 
+    GROUP BY legacyName 
+    ORDER BY qty DESC 
+    LIMIT 10
+""")
+    suspend fun getTopSellingByQuantity(): List<MovementReportItem>
+
+    // 2. الأبطال: الأفضل مبيعاً (بالقيمة) على الإطلاق
+    @Query("""
+    SELECT legacyName as name, SUM(quantity) as qty, SUM(totalAmount) as sales, SUM(profit) as profit 
+    FROM sales_history 
+    GROUP BY legacyName 
+    ORDER BY sales DESC 
+    LIMIT 10
+""")
+    suspend fun getTopSellingByValue(): List<MovementReportItem>
+
+    // 3. الأبطال: الأكثر ربحاً على الإطلاق
+    @Query("""
+    SELECT legacyName as name, SUM(quantity) as qty, SUM(totalAmount) as sales, SUM(profit) as profit 
+    FROM sales_history 
+    GROUP BY legacyName 
+    ORDER BY profit DESC 
+    LIMIT 10
+""")
+    suspend fun getTopProfitByValue(): List<MovementReportItem>
+
+    // 4. الديون والموردين: إجمالي المشتريات والمدفوع والدين لكل مورد
+    @Query("""
+    SELECT supplierName, SUM(orderValue) as totalPurchases, SUM(paidAmount) as totalPaid, SUM(debt) as totalDebt
+    FROM supplier_ledger 
+    GROUP BY supplierName
+""")
+    suspend fun getSupplierSummary(): List<SupplierSummary>
 }
