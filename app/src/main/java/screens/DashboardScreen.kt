@@ -210,7 +210,7 @@ fun DashboardScreen(viewModel: PharmacyViewModel, onNavigate: (String) -> Unit =
                 icon = Icons.Default.Wallet
             )
         }
-a
+
         // 5. الرسم البياني
         item(span = { GridItemSpan(maxLineSpan) }) {
             Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), elevation = CardDefaults.cardElevation(1.dp)) {
