@@ -186,6 +186,10 @@ fun PurchasesScreen(viewModel: PharmacyViewModel) {
                                     invoiceNumber = ""
                                     amountPaid = "0"
                                     purchaseItems = emptyList()
+                                },
+                                        onError = { error ->
+                                    isSaving = false // 👈 إعادة الزر للعمل
+                                    Toast.makeText(context, error, Toast.LENGTH_LONG).show()
                                 }
                             )
                         },

@@ -1,6 +1,5 @@
 package com.example.myapplication.ui
 
-import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -9,9 +8,6 @@ import com.example.myapplication.data.local.dao.*
 import com.example.myapplication.data.local.entity.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -22,7 +18,6 @@ import androidx.paging.PagingData
 import androidx.paging.cachedIn
 import androidx.room.withTransaction
 
-// كلاس لحفظ إحصائيات لوحة التحكم
 data class DashboardStats(
     val todaySales: Double = 0.0,
     val todayProfit: Double = 0.0,
@@ -37,7 +32,6 @@ data class DashboardStats(
 
 data class DailySales(val dayName: String, val amount: Double)
 
-// كلاس لحفظ إحصائيات التقرير الشهري
 data class MonthlyReportStats(
     val totalSales: Double = 0.0,
     val totalProfit: Double = 0.0,
@@ -45,7 +39,6 @@ data class MonthlyReportStats(
     val netProfit: Double = 0.0
 )
 
-// 👇 هذا الكلاس كان مفقوداً في مشروعك وتمت إضافته هنا 👇
 data class PurchaseItemInput(
     val name: String,
     val form: String,
@@ -131,7 +124,6 @@ class PharmacyViewModel(
         }
     }
 
-    // --- تقرير الأدوية المنتهية ---
     private val _expiredReport = MutableStateFlow<List<ExpiredReportItem>>(emptyList())
     val expiredReport: StateFlow<List<ExpiredReportItem>> = _expiredReport
 
@@ -143,7 +135,6 @@ class PharmacyViewModel(
         }
     }
 
-    // --- تقرير المبيعات والأرباح الشهرية ---
     private val _monthlyReportStats = MutableStateFlow(MonthlyReportStats())
     val monthlyReportStats: StateFlow<MonthlyReportStats> = _monthlyReportStats
 
@@ -201,7 +192,6 @@ class PharmacyViewModel(
                 monthOfferProfit = dashboardDao.getOfferProfitBetween(startOfMonth, endOfToday) ?: 0.0
             )
 
-            // --- جلب بيانات الرسم البياني لآخر 7 أيام ---
             val sevenDaysAgo = Calendar.getInstance().apply {
                 add(Calendar.DAY_OF_YEAR, -6)
                 set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0)
@@ -213,10 +203,8 @@ class PharmacyViewModel(
             for (i in 6 downTo 0) {
                 val day = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -i) }
                 val dayFormat = SimpleDateFormat("EEEE", Locale("ar")).format(day.time)
-
                 val startOfDay = day.apply { set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0) }.timeInMillis
                 val endOfDay = day.apply { set(Calendar.HOUR_OF_DAY, 23); set(Calendar.MINUTE, 59); set(Calendar.SECOND, 59) }.timeInMillis
-
                 val dayTotal = weeklySales.filter { it.saleDate in startOfDay..endOfDay }.sumOf { it.totalAmount }
                 chartData.add(DailySales(dayFormat, dayTotal))
             }
@@ -242,7 +230,6 @@ class PharmacyViewModel(
         if (query.isBlank()) items else items.filter { it.name.contains(query, true) || it.itemId.contains(query, true) }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // حالات جديدة لشاشة المخزون (الصلاحيات)
     private val _expiringItems = MutableStateFlow<List<ItemEntity>>(emptyList())
     val expiringItems: StateFlow<List<ItemEntity>> = _expiringItems
 
@@ -252,11 +239,9 @@ class PharmacyViewModel(
     fun loadExpiryFilters() {
         viewModelScope.launch(Dispatchers.IO) {
             val today = System.currentTimeMillis()
-            val futureDate = today + (90L * 24 * 60 * 60 * 1000) // 90 يوماً
-
+            val futureDate = today + (90L * 24 * 60 * 60 * 1000)
             val expired = itemDao.getItemsWithExpiredBatches(today)
             val expiring = itemDao.getItemsWithExpiringBatches(today, futureDate)
-
             withContext(Dispatchers.Main) {
                 _expiredItems.value = expired
                 _expiringItems.value = expiring
@@ -331,7 +316,7 @@ class PharmacyViewModel(
     val expenses: StateFlow<List<ExpenseEntity>> = expenseDao.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val settings: StateFlow<List<SettingEntity>> = settingDao.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val supplierLedger: StateFlow<List<SupplierLedgerEntity>> = supplierLedgerDao.getAllLedger().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-    // جلب أسماء الموردين الفريدين للقائمة المنسدلة
+
     val supplierNames: StateFlow<List<String>> = supplierLedgerDao.getAllLedger()
         .map { ledger -> ledger.map { it.supplierName }.distinct().sorted() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -354,7 +339,6 @@ class PharmacyViewModel(
     fun updateReorderLevel(itemId: String, level: Double) { viewModelScope.launch(Dispatchers.IO) { itemDao.updateReorderLevel(itemId, level) } }
     fun updateSellingPrice(itemId: String, newPrice: Double) { viewModelScope.launch(Dispatchers.IO) { batchDao.updateSellingPriceForItem(itemId, newPrice) } }
     fun repairInventoryBalances(onSuccess: () -> Unit) { viewModelScope.launch(Dispatchers.IO) { itemDao.repairAllBalances(); withContext(Dispatchers.Main) { onSuccess() } } }
-
     fun writeOffStock(batchId: String, itemId: String, qtyToWriteOff: Double, reason: String, onResult: (Boolean, String) -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -387,6 +371,7 @@ class PharmacyViewModel(
             }
         }
     }
+
     fun saveSetting(key: String, value: String) { viewModelScope.launch(Dispatchers.IO) { settingDao.upsert(SettingEntity(key, value, "تعديل من التطبيق")) } }
     fun addSetting(key: String, value: String, onResult: (Boolean) -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -406,7 +391,15 @@ class PharmacyViewModel(
 
     fun addSupplierRecord(name: String, notes: String, orderValue: Double, paidAmount: Double) {
         viewModelScope.launch(Dispatchers.IO) {
-            supplierLedgerDao.insertRecord(SupplierLedgerEntity(opDate = System.currentTimeMillis(), supplierName = name, orderValue = orderValue, invoiceNo = "INV-" + System.currentTimeMillis().toString().takeLast(5), paidAmount = paidAmount, debt = orderValue - paidAmount, notes = notes))
+            supplierLedgerDao.insertRecord(SupplierLedgerEntity(
+                opDate = System.currentTimeMillis(),
+                supplierName = name,
+                orderValue = orderValue,
+                invoiceNo = "INV-" + System.currentTimeMillis().toString().takeLast(5),
+                paidAmount = paidAmount,
+                debt = orderValue - paidAmount,
+                notes = notes
+            ))
         }
     }
 
@@ -476,23 +469,14 @@ class PharmacyViewModel(
     fun deleteSaleAndRestock(saleId: Long, onSuccess: () -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                db.withTransaction { // 👈 تأمين العملية
+                db.withTransaction {
                     val sale = saleDao.getSaleById(saleId)
                     if (sale != null && sale.batchId != null) {
-                        // 1. جلب الدفعة لمعرفة رقم الدواء (itemId)
                         val batch = batchDao.getBatchById(sale.batchId)
-
                         if (batch != null) {
-                            // 2. إرجاع الكمية إلى الدفعة (Batch)
                             batchDao.restoreBatchQuantity(sale.batchId, sale.quantity)
-
-                            // 3. إرجاع الكمية إلى رصيد الدواء الإجمالي (Item) باستخدام batch.itemId
                             itemDao.deductItemStock(batch.itemId, -sale.quantity)
-
-                            // 4. حذف حركة المخزون
                             saleDao.deleteSaleMovement(sale.batchId, sale.invoiceRef)
-
-                            // 5. حذف الفاتورة
                             saleDao.deleteSaleById(saleId)
                         }
                     }
@@ -500,7 +484,6 @@ class PharmacyViewModel(
                 withContext(Dispatchers.Main) { onSuccess() }
             } catch (e: Exception) {
                 e.printStackTrace()
-                // اختياري: يمكنك إضافة Toast هنا لإظهار الخطأ للمستخدم إذا أردت
             }
         }
     }
@@ -508,35 +491,35 @@ class PharmacyViewModel(
     fun editSale(saleId: Long, newQty: Double, newPrice: Double, newDate: Long, onResult: (Boolean, String) -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val sale = saleDao.getSaleById(saleId)
-                if (sale == null || sale.batchId == null) { withContext(Dispatchers.Main) { onResult(false, "الفاتورة غير موجودة") }; return@launch }
-                val batch = batchDao.getBatchById(sale.batchId)
-                if (batch == null) { withContext(Dispatchers.Main) { onResult(false, "الدفعة غير موجودة") }; return@launch }
+                db.withTransaction {
+                    val sale = saleDao.getSaleById(saleId)
+                    if (sale == null || sale.batchId == null) throw Exception("الفاتورة غير موجودة")
+                    val batch = batchDao.getBatchById(sale.batchId) ?: throw Exception("الدفعة غير موجودة")
 
-                val deltaQty = newQty - sale.quantity
-                if (deltaQty > 0 && batch.currentQty < deltaQty) { withContext(Dispatchers.Main) { onResult(false, "الكمية المطلوبة أكبر من المتوفر!") }; return@launch }
+                    val deltaQty = newQty - sale.quantity
+                    if (deltaQty > 0 && batch.currentQty < deltaQty) throw Exception("الكمية المطلوبة أكبر من المتوفر!")
 
-                batchDao.deductBatchQuantity(batch.batchId, deltaQty)
-                val historicalCostPerUnit = if (sale.quantity > 0) (sale.totalAmount - (sale.profit ?: 0.0)) / sale.quantity else 0.0
-                val newTotal = newQty * newPrice
-                val newProfit = newTotal - (newQty * historicalCostPerUnit)
-                saleDao.insertSale(sale.copy(
-                    quantity = newQty,
-                    unitPrice = newPrice,
-                    totalAmount = newTotal,
-                    profit = newProfit,
-                    saleDate = newDate,
-                    month = SimpleDateFormat("yyyyMM", Locale.US).format(Date(newDate)).toLongOrNull() ?: 0L
-                ))
-                stockMovementDao.updateSaleMovementQuantity(batch.batchId, sale.invoiceRef, -newQty)
-                itemDao.repairSingleBalance(batch.itemId)
+                    batchDao.deductBatchQuantity(batch.batchId, deltaQty)
+                    val historicalCostPerUnit = if (sale.quantity > 0) (sale.totalAmount - (sale.profit ?: 0.0)) / sale.quantity else 0.0
+                    val newTotal = newQty * newPrice
+                    val newProfit = newTotal - (newQty * historicalCostPerUnit)
+
+                    saleDao.insertSale(sale.copy(
+                        quantity = newQty, unitPrice = newPrice, totalAmount = newTotal, profit = newProfit,
+                        saleDate = newDate, month = SimpleDateFormat("yyyyMM", Locale.US).format(Date(newDate)).toLongOrNull() ?: 0L
+                    ))
+                    stockMovementDao.updateSaleMovementQuantity(batch.batchId, sale.invoiceRef, -newQty)
+                    itemDao.repairSingleBalance(batch.itemId)
+                }
                 withContext(Dispatchers.Main) { onResult(true, "تم التعديل بنجاح") }
-            } catch (e: Exception) { withContext(Dispatchers.Main) { onResult(false, "حدث خطأ: ${e.message}") } }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) { onResult(false, "حدث خطأ: ${e.message}") }
+            }
         }
     }
 
     // --- المشتريات ---
-    fun processPurchase(supplierName: String, invoiceNumber: String, amountPaid: Double, items: List<PurchaseItemInput>, onSuccess: () -> Unit) {
+    fun processPurchase(supplierName: String, invoiceNumber: String, amountPaid: Double, items: List<PurchaseItemInput>, onSuccess: () -> Unit, onError: (String) -> Unit = {}) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 db.withTransaction {
@@ -548,13 +531,8 @@ class PharmacyViewModel(
                         if (existingItem == null) {
                             finalItemId = "ITEM-" + UUID.randomUUID().toString().take(8)
                             itemDao.insertItems(listOf(ItemEntity(
-                                itemId = finalItemId,
-                                name = item.name,
-                                dosageForm = item.form,
-                                company = item.company,
-                                currentStock = 0.0,
-                                reorderLevel = 2.0,
-                                barcode = item.barcode
+                                itemId = finalItemId, name = item.name, dosageForm = item.form,
+                                company = item.company, currentStock = 0.0, reorderLevel = 2.0, barcode = item.barcode
                             )))
                         } else {
                             if (item.barcode != null && existingItem.barcode == null) {
@@ -594,11 +572,20 @@ class PharmacyViewModel(
                         }
                         if (finalItemId != null) itemDao.deductItemStock(finalItemId, -totalUnits)
                     }
-                    addSupplierRecord(supplierName, "فاتورة رقم: $invoiceNumber", totalInvoice, amountPaid)
+
+                    supplierLedgerDao.insertRecord(SupplierLedgerEntity(
+                        opDate = System.currentTimeMillis(),
+                        supplierName = supplierName,
+                        orderValue = totalInvoice,
+                        invoiceNo = "INV-" + System.currentTimeMillis().toString().takeLast(5),
+                        paidAmount = amountPaid,
+                        debt = totalInvoice - amountPaid,
+                        notes = "فاتورة رقم: $invoiceNumber"
+                    ))
                 }
                 withContext(Dispatchers.Main) { onSuccess() }
             } catch (e: Exception) {
-                e.printStackTrace()
+                withContext(Dispatchers.Main) { onError(e.message ?: "فشل حفظ الفاتورة") }
             }
         }
     }

@@ -175,6 +175,8 @@ fun SalesScreen(viewModel: PharmacyViewModel) {
                                     val finalImagePath = if (prescriptionUri != null) {
                                         withContext(Dispatchers.IO) { compressAndSaveImage(context, prescriptionUri!!) }
                                     } else null
+
+                                    val finalTotal = editableTotal.toDoubleOrNull()
 // الكود الجديد
                                     viewModel.checkout(
                                         customerName = customerName.ifBlank { null },

@@ -29,6 +29,7 @@ import com.example.myapplication.data.local.entity.CompanyEntity
 import com.example.myapplication.data.local.entity.ItemEntity
 import com.example.myapplication.ui.PharmacyViewModel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -184,23 +185,18 @@ fun ShortagesScreen(viewModel: PharmacyViewModel, onBack: () -> Unit) {
                                     // 👇 جلب آخر سعر لهذا الدواء وإضافته للسلة 👇
                                     kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main)
                                         .launch {
-                                            viewModel.getBatchesForItem(item.itemId)
-                                                .collect { batches ->
-                                                    val latestPrice =
-                                                        batches.firstOrNull()?.salePrice ?: 0.0
-                                                    purchaseCart.add(
-                                                        PurchaseOrderItem(
-                                                            name = item.name,
-                                                            company = item.company ?: "-",
-                                                            netPrice = latestPrice // 👈 نمرر السعر هنا
-                                                        )
-                                                    )
-                                                    Toast.makeText(
-                                                        context,
-                                                        "تمت الإضافة للسلة",
-                                                        Toast.LENGTH_SHORT
-                                                    ).show()
-                                                }
+                                            // 👇 استخدام first() لجلب السعر مرة واحدة فقط
+                                            val batches = viewModel.getBatchesForItem(item.itemId).first()
+                                            val latestPrice = batches.firstOrNull()?.salePrice ?: 0.0
+
+                                            purchaseCart.add(
+                                                PurchaseOrderItem(
+                                                    name = item.name,
+                                                    company = item.company ?: "-",
+                                                    netPrice = latestPrice
+                                                )
+                                            )
+                                            Toast.makeText(context, "تمت الإضافة للسلة", Toast.LENGTH_SHORT).show()
                                         }
                                 }
                             }
