@@ -24,8 +24,8 @@ interface BatchDao {
     @Query("UPDATE batches SET currentQty = currentQty + :qty WHERE batchId = :batchId")
     suspend fun restoreBatchQuantity(batchId: String, qty: Double)
 
-    @Query("SELECT * FROM batches WHERE itemId = :itemId AND expiryDate = :expiryDate AND purchasePrice = :purchasePrice LIMIT 1")
-    suspend fun getMatchingBatch(itemId: String, expiryDate: Long, purchasePrice: Double): BatchEntity?
+    @Query("SELECT * FROM batches WHERE itemId = :itemId AND expiryDate = :expiryDate AND purchasePrice = :purchasePrice AND originalOffer = :offer LIMIT 1")
+    suspend fun getMatchingBatch(itemId: String, expiryDate: Long, purchasePrice: Double, offer: String): BatchEntity?
 
     @Query("SELECT SUM(currentQty) FROM batches WHERE itemId = :itemId")
     suspend fun getTotalBatchQuantity(itemId: String): Double?
@@ -41,4 +41,5 @@ interface BatchDao {
 
     @Update
     suspend fun updateBatch(batch: BatchEntity)
+
 }

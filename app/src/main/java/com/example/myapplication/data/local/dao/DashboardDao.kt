@@ -15,9 +15,8 @@ interface DashboardDao {
     suspend fun getProfitBetween(start: Long, end: Long): Double?
 
     // قيمة المخزون الإجمالية (كمية * تكلفة الوحدة) للدفعات غير المنتهية
-    @Query("SELECT SUM(currentQty * unitCost) FROM batches WHERE currentQty > 0")
-    suspend fun getTotalInventoryValue(): Double?
-
+    @Query("SELECT SUM(currentQty * unitCost) FROM batches WHERE currentQty > 0 AND expiryDate > :currentTime")
+    suspend fun getTotalInventoryValue(currentTime: Long): Double?
     // إجمالي مصاريف الشهر
     @Query("SELECT SUM(amount) FROM expenses WHERE month = :monthKey")
     suspend fun getExpensesForMonth(monthKey: Long): Double?

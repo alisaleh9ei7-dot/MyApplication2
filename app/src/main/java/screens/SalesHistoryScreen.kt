@@ -2,6 +2,7 @@ package com.example.myapplication.ui.screens
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.pdf.PdfDocument
 import android.widget.Toast
@@ -32,6 +33,9 @@ import com.example.myapplication.ui.components.DatePickerField
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
+import android.text.Layout
+import android.text.StaticLayout
+import android.text.TextPaint
 import java.util.*
 
 // كلاس لتجميع أصناف الفاتورة الواحدة في كائن واحد
@@ -380,41 +384,77 @@ fun openPrescriptionImage(context: Context, imagePath: String) {
     }
 }
 
+
+
 fun shareInvoicePdf(context: Context, invoice: InvoiceGroup) {
     val pdfDocument = PdfDocument()
     val pageInfo = PdfDocument.PageInfo.Builder(595, 842, 1).create()
     val page = pdfDocument.startPage(pageInfo)
     val canvas = page.canvas
 
-    val titlePaint = Paint().apply { textSize = 24f; isFakeBoldText = true; textAlign = Paint.Align.CENTER }
-    val textPaint = Paint().apply { textSize = 16f; textAlign = Paint.Align.RIGHT }
-    val pageWidth = 595f; val margin = 40f
-    val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
-    var currentY = 120f
+    val pageWidth = 595
+    val margin = 40
+    val contentWidth = pageWidth - (margin * 2)
+    var currentY = 40f
 
-    canvas.drawText("فاتورة مبيعات", pageWidth / 2, 60f, titlePaint)
-    canvas.drawText("رقم الفاتورة: ${invoice.invoiceRef}", pageWidth - margin, currentY, textPaint)
-    currentY += 30f
-    canvas.drawText("التاريخ: ${dateFormat.format(Date(invoice.date))}", pageWidth - margin, currentY, textPaint)
+    // دالة مساعدة لرسم النص العربي (تدعم RTL)
+    fun drawArabicText(text: String, textSize: Float, isBold: Boolean = false, isCenter: Boolean = false): Float {
+        val textPaint = TextPaint().apply {
+            this.textSize = textSize
+            this.isFakeBoldText = isBold
+            this.color = android.graphics.Color.BLACK
+            this.textAlign = if (isCenter) Paint.Align.CENTER else Paint.Align.RIGHT
+        }
+
+        // إعدادات StaticLayout لدعم اللغة العربية
+        val alignment = if (isCenter) Layout.Alignment.ALIGN_CENTER else Layout.Alignment.ALIGN_OPPOSITE
+
+        val staticLayout = StaticLayout.Builder
+            .obtain(text, 0, text.length, textPaint, contentWidth)
+            .setAlignment(alignment)
+            .setTextDirection(android.text.TextDirectionHeuristics.RTL) // 👈 إجبار الاتجاه من اليمين لليسار
+            .build()
+
+        canvas.save()
+        // إذا كان النص في المنتصف، نضع الإحداثي في المنتصف، وإلا في اليمين
+        val xOffset = if (isCenter) (pageWidth / 2).toFloat() else (pageWidth - margin).toFloat()
+        canvas.translate(if (isCenter) 0f else xOffset, currentY)
+        staticLayout.draw(canvas)
+        canvas.restore()
+
+        return staticLayout.height.toFloat() // نرجع الارتفاع لنعرف أين نضع السطر التالي
+    }
+
+    // 1. العنوان الرئيسي (وسط)
+    currentY += drawArabicText("فاتورة مبيعات", 24f, isBold = true, isCenter = true)
+    currentY += 10f
+
+    // 2. بيانات الفاتورة (يمين)
+    val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
+    currentY += drawArabicText("رقم الفاتورة: ${invoice.invoiceRef}", 14f)
+    currentY += drawArabicText("التاريخ: ${dateFormat.format(Date(invoice.date))}", 14f)
 
     if (!invoice.customerName.isNullOrBlank()) {
-        currentY += 30f
-        canvas.drawText("المريض: ${invoice.customerName}", pageWidth - margin, currentY, textPaint)
+        currentY += drawArabicText("المريض: ${invoice.customerName}", 14f)
     }
-    currentY += 40f
-    canvas.drawText("الأصناف:", pageWidth - margin, currentY, Paint(textPaint).apply { isFakeBoldText = true })
 
+    currentY += 15f // مسافة
+    currentY += drawArabicText("الأصناف:", 16f, isBold = true)
+
+    // 3. الأصناف
     invoice.items.forEach { item ->
-        currentY += 30f
-        canvas.drawText("- ${item.legacyName} | كمية: ${item.quantity} | سعر: ${item.unitPrice}", pageWidth - margin, currentY, textPaint)
+        val itemText = "- ${item.legacyName} | كمية: ${item.quantity} | سعر: ${item.unitPrice}"
+        currentY += drawArabicText(itemText, 13f)
+        currentY += 5f // مسافة بين الأصناف
     }
 
-    currentY += 40f
-    textPaint.isFakeBoldText = true; textPaint.textSize = 20f
-    canvas.drawText("الإجمالي: ${String.format(Locale.US, "%.2f", invoice.totalAmount)}", pageWidth - margin, currentY, textPaint)
+    // 4. الإجمالي
+    currentY += 15f
+    currentY += drawArabicText("الإجمالي: ${String.format(Locale.US, "%.2f", invoice.totalAmount)}", 18f, isBold = true)
 
     pdfDocument.finishPage(page)
 
+    // --- حفظ ومشاركة الملف ---
     val file = File(context.cacheDir, "Invoice_${invoice.invoiceRef}.pdf")
     try { pdfDocument.writeTo(FileOutputStream(file)) } catch (e: Exception) { e.printStackTrace() } finally { pdfDocument.close() }
 

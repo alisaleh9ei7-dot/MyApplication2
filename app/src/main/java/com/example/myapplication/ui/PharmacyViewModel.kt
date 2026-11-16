@@ -183,7 +183,7 @@ class PharmacyViewModel(
             val stats = DashboardStats(
                 todaySales = dashboardDao.getSalesBetween(startOfToday, endOfToday) ?: 0.0,
                 todayProfit = dashboardDao.getProfitBetween(startOfToday, endOfToday) ?: 0.0,
-                inventoryValue = dashboardDao.getTotalInventoryValue() ?: 0.0,
+                inventoryValue = dashboardDao.getTotalInventoryValue(System.currentTimeMillis()) ?: 0.0,
                 monthExpenses = dashboardDao.getExpensesForMonth(monthKey) ?: 0.0,
                 lowStockCount = dashboardDao.getLowStockCount(),
                 expiringSoonCount = dashboardDao.getExpiringSoonCount(startOfToday, futureDate),
@@ -339,6 +339,32 @@ class PharmacyViewModel(
     fun updateReorderLevel(itemId: String, level: Double) { viewModelScope.launch(Dispatchers.IO) { itemDao.updateReorderLevel(itemId, level) } }
     fun updateSellingPrice(itemId: String, newPrice: Double) { viewModelScope.launch(Dispatchers.IO) { batchDao.updateSellingPriceForItem(itemId, newPrice) } }
     fun repairInventoryBalances(onSuccess: () -> Unit) { viewModelScope.launch(Dispatchers.IO) { itemDao.repairAllBalances(); withContext(Dispatchers.Main) { onSuccess() } } }
+    fun addNewItem(
+        name: String,
+        company: String,
+        dosageForm: String,
+        reorderLevel: Double,
+        barcode: String?,
+        onSuccess: () -> Unit
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val newItemId = "ITEM-" + UUID.randomUUID().toString().take(8)
+                itemDao.insertItems(listOf(ItemEntity(
+                    itemId = newItemId,
+                    name = name,
+                    company = company,
+                    dosageForm = dosageForm,
+                    currentStock = 0.0, // الرصيد يبدأ بـ 0
+                    reorderLevel = reorderLevel,
+                    barcode = barcode
+                )))
+                withContext(Dispatchers.Main) { onSuccess() }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
     fun writeOffStock(batchId: String, itemId: String, qtyToWriteOff: Double, reason: String, onResult: (Boolean, String) -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -546,7 +572,7 @@ class PharmacyViewModel(
                         val effectiveUnitCost = if (totalUnits > 0) lineTotal / totalUnits else 0.0
                         val offerString = if (item.freeUnits == 0.0) "${item.paidUnits.toInt()}+0" else "${item.paidUnits.toInt()}+${item.freeUnits.toInt()}"
 
-                        val matchingBatch = batchDao.getMatchingBatch(finalItemId ?: "", item.expiryDate, item.purchasePrice)
+                        val matchingBatch = batchDao.getMatchingBatch(finalItemId ?: "", item.expiryDate, item.purchasePrice, offerString)
 
                         if (matchingBatch != null) {
                             val updatedBatch = matchingBatch.copy(

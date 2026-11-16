@@ -56,6 +56,7 @@ fun InventoryScreen(viewModel: PharmacyViewModel) {
 
     var selectedSort by remember { mutableStateOf(SortOption.ALPHABETICAL) }
     var sortExpanded by remember { mutableStateOf(false) }
+    var showAddDialog by remember { mutableStateOf(false) }
 
     // حساب الإحصائيات
     val totalItems = allItems.size
@@ -172,6 +173,31 @@ fun InventoryScreen(viewModel: PharmacyViewModel) {
                 }
             }
         }
+    }
+    // زر إضافة دواء جديد
+    Box(modifier = Modifier.fillMaxSize()) {
+        FloatingActionButton(
+            onClick = { showAddDialog = true },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(16.dp),
+            containerColor = MaterialTheme.colorScheme.primary
+        ) {
+            Icon(Icons.Default.Add, contentDescription = "إضافة دواء", tint = Color.White)
+        }
+    }
+
+// نافذة إضافة الدواء
+    if (showAddDialog) {
+        AddNewItemDialog(
+            onDismiss = { showAddDialog = false },
+            onAdd = { name, company, form, reorder, barcode ->
+                viewModel.addNewItem(name, company, form, reorder, barcode) {
+                    Toast.makeText(context, "تم إضافة الدواء بنجاح", Toast.LENGTH_SHORT).show()
+                    showAddDialog = false
+                }
+            }
+        )
     }
 }
 @Composable
@@ -469,3 +495,60 @@ fun InventoryItemCard(item: ItemEntity, viewModel: PharmacyViewModel) {
             }
         }
     }
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AddNewItemDialog(
+    onDismiss: () -> Unit,
+    onAdd: (String, String, String, Double, String?) -> Unit
+) {
+    var name by remember { mutableStateOf("") }
+    var company by remember { mutableStateOf("") }
+    var form by remember { mutableStateOf("") }
+    var reorderLevel by remember { mutableStateOf("2") }
+    var barcode by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("إضافة دواء جديد للمخزون") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = name, onValueChange = { name = it },
+                    label = { Text("اسم الدواء *") }, modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = company, onValueChange = { company = it },
+                    label = { Text("الشركة") }, modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = form, onValueChange = { form = it },
+                    label = { Text("الشكل الصيدلاني (حب، شراب)") }, modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = reorderLevel, onValueChange = { reorderLevel = it },
+                    label = { Text("حد الطلب") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = barcode, onValueChange = { barcode = it },
+                    label = { Text("الباركود (اختياري)") }, modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                if (name.isNotBlank()) {
+                    onAdd(
+                        name,
+                        company,
+                        form,
+                        reorderLevel.toDoubleOrNull() ?: 2.0,
+                        if (barcode.isBlank()) null else barcode
+                    )
+                }
+            }) { Text("إضافة") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("إلغاء") } }
+    )
+}
