@@ -6,9 +6,9 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import com.example.myapplication.data.local.dao.*
 import com.example.myapplication.data.local.entity.*
-import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 @Database(
@@ -23,11 +23,10 @@ import kotlinx.coroutines.launch
         CompanyEntity::class,
         AuditLogEntity::class
     ],
-    version = 6,
-    exportSchema = true // 👈 تفعيل تصدير المخطط (لحماية البيانات مستقبلاً)
+    version = AppDatabase.DB_VERSION,
+    exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
-    // ربط الـ DAOs
     abstract fun itemDao(): ItemDao
     abstract fun batchDao(): BatchDao
     abstract fun saleDao(): SaleDao
@@ -41,42 +40,43 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun reportDao(): ReportDao
 
     companion object {
+        const val DB_NAME = "my_pharmacy_db"
+        const val DB_VERSION = 6
+
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
+        private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
         fun getDatabase(context: Context): AppDatabase {
-            return INSTANCE ?: synchronized(this) {
-                val instance = Room.databaseBuilder(
-                    context.applicationContext,
-                    AppDatabase::class.java,
-                    "my_pharmacy_db"
-                )
-                    // 👈 تم حذف .fallbackToDestructiveMigration() نهائياً
-                    .addCallback(object : RoomDatabase.Callback() {
-                        override fun onCreate(db: SupportSQLiteDatabase) {
-                            super.onCreate(db)
-                            // إصلاح: استخدام instance مباشرة بدلاً من INSTANCE
-                            val instance = INSTANCE
-                            if (instance != null) {
-                                CoroutineScope(Dispatchers.IO).launch {
-                                    instance.companyDao().populateCompaniesFromItems()
-                                }
-                            }
+            INSTANCE?.let { return it }
+            return synchronized(this) {
+                INSTANCE ?: buildDatabase(context.applicationContext).also { created ->
+                    INSTANCE = created
+                    // يُنفَّذ مرة لكل إنشاء للنسخة (عند بدء التطبيق وبعد كل استعادة).
+                    // لا نستخدم Callback.onCreate/onOpen لأن INSTANCE يكون null وقتها
+                    // فلا تُنفَّذ العملية أبداً في أول فتح.
+                    ioScope.launch {
+                        try {
+                            created.companyDao().populateCompaniesFromItems()
+                        } catch (e: Exception) {
+                            e.printStackTrace()
                         }
-                        override fun onOpen(db: SupportSQLiteDatabase) {
-                            super.onOpen(db)
-                            // إصلاح: استخدام instance مباشرة بدلاً من INSTANCE
-                            val instance = INSTANCE
-                            if (instance != null) {
-                                CoroutineScope(Dispatchers.IO).launch {
-                                    instance.companyDao().populateCompaniesFromItems()
-                                }
-                            }
-                        }
-                    })
-                    .build()
-                INSTANCE = instance
-                instance
+                    }
+                }
+            }
+        }
+
+        private fun buildDatabase(appContext: Context): AppDatabase =
+            Room.databaseBuilder(appContext, AppDatabase::class.java, DB_NAME)
+                // لا fallbackToDestructiveMigration: أي تغيير في المخطط يحتاج Migration صريح
+                .build()
+
+        /** يغلق القاعدة ويصفّر النسخة، ليُعاد بناؤها عند أول getDatabase() تالٍ. */
+        fun closeAndReset() {
+            synchronized(this) {
+                INSTANCE?.let { if (it.isOpen) it.close() }
+                INSTANCE = null
             }
         }
     }

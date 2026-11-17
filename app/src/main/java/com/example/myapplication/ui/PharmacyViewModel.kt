@@ -17,6 +17,7 @@ import androidx.paging.PagingConfig
 import androidx.paging.PagingData
 import androidx.paging.cachedIn
 import androidx.room.withTransaction
+import com.example.myapplication.utils.PrescriptionStorage
 
 data class DashboardStats(
     val todaySales: Double = 0.0,
@@ -366,34 +367,38 @@ class PharmacyViewModel(
         }
     }
     fun writeOffStock(batchId: String, itemId: String, qtyToWriteOff: Double, reason: String, onResult: (Boolean, String) -> Unit) {
+        if (qtyToWriteOff.isNaN() || qtyToWriteOff.isInfinite() || qtyToWriteOff <= 0.0) {
+            onResult(false, "الكمية يجب أن تكون أكبر من صفر")
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val batch = batchDao.getBatchById(batchId)
-                if (batch == null) {
-                    withContext(Dispatchers.Main) { onResult(false, "الدفعة غير موجودة") }
-                    return@launch
+                db.withTransaction {
+                    val batch = batchDao.getBatchById(batchId)
+                        ?: throw IllegalStateException("الدفعة غير موجودة")
+                    if (batch.itemId != itemId) {
+                        throw IllegalStateException("الدفعة لا تخص هذا الصنف")
+                    }
+                    if (batch.currentQty < qtyToWriteOff) {
+                        throw IllegalStateException("الكمية المطلوبة أكبر من المتوفر في هذه الدفعة")
+                    }
+
+                    val now = System.currentTimeMillis()
+                    batchDao.deductBatchQuantity(batchId, qtyToWriteOff)
+                    itemDao.deductItemStock(itemId, qtyToWriteOff)
+                    stockMovementDao.insertMovement(StockMovementEntity(
+                        movementDate = now,
+                        movementType = "إتلاف",
+                        batchId = batchId,
+                        itemId = itemId,
+                        quantity = -qtyToWriteOff,
+                        reference = "WRITE-OFF-${now.toString().takeLast(5)}",
+                        note = reason
+                    ))
                 }
-                if (batch.currentQty < qtyToWriteOff) {
-                    withContext(Dispatchers.Main) { onResult(false, "الكمية المطلوبة أكبر من المتوفر في هذه الدفعة") }
-                    return@launch
-                }
-
-                batchDao.deductBatchQuantity(batchId, qtyToWriteOff)
-                itemDao.deductItemStock(itemId, qtyToWriteOff)
-
-                stockMovementDao.insertMovement(StockMovementEntity(
-                    movementDate = System.currentTimeMillis(),
-                    movementType = "إتلاف",
-                    batchId = batchId,
-                    itemId = itemId,
-                    quantity = -qtyToWriteOff,
-                    reference = "WRITE-OFF-${System.currentTimeMillis().toString().takeLast(5)}",
-                    note = reason
-                ))
-
                 withContext(Dispatchers.Main) { onResult(true, "تم إتلاف الكمية بنجاح") }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { onResult(false, "حدث خطأ: ${e.message}") }
+                withContext(Dispatchers.Main) { onResult(false, e.message ?: "حدث خطأ غير متوقع") }
             }
         }
     }
@@ -438,6 +443,9 @@ class PharmacyViewModel(
         val cart = _cartItems.value
         if (cart.isEmpty() || !_isCheckingOut.compareAndSet(false, true)) return
 
+        // نحفظ اسم الملف فقط، لا المسار المطلق (حتى تعمل الاستعادة على أي جهاز)
+        val storedPrescription = PrescriptionStorage.toStoredName(prescriptionPath)
+
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val invoice = db.withTransaction {
@@ -462,7 +470,7 @@ class PharmacyViewModel(
                                 profit = take * (batch.salePrice - batch.purchasePrice),
                                 offerProfit = take * (batch.purchasePrice - batch.unitCost),
                                 month = monthKey, invoiceRef = invoiceNumber,
-                                customerName = customerName, prescriptionImagePath = prescriptionPath
+                                customerName = customerName, prescriptionImagePath = storedPrescription
                             ))
 
                             stockMovementDao.insertMovement(StockMovementEntity(
@@ -517,6 +525,9 @@ class PharmacyViewModel(
     fun editSale(saleId: Long, newQty: Double, newPrice: Double, newDate: Long, onResult: (Boolean, String) -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                if (newQty.isNaN() || newQty <= 0.0 || newPrice.isNaN() || newPrice < 0.0) {
+                    throw Exception("الكمية والسعر غير صالحين")
+                }
                 db.withTransaction {
                     val sale = saleDao.getSaleById(saleId)
                     if (sale == null || sale.batchId == null) throw Exception("الفاتورة غير موجودة")
@@ -574,28 +585,29 @@ class PharmacyViewModel(
 
                         val matchingBatch = batchDao.getMatchingBatch(finalItemId ?: "", item.expiryDate, item.purchasePrice, offerString)
 
+                        val targetBatchId: String
                         if (matchingBatch != null) {
-                            val updatedBatch = matchingBatch.copy(
+                            targetBatchId = matchingBatch.batchId
+                            batchDao.updateBatch(matchingBatch.copy(
                                 currentQty = matchingBatch.currentQty + totalUnits,
                                 totalUnits = matchingBatch.totalUnits + totalUnits,
                                 dataStatus = "محدثة"
-                            )
-                            batchDao.updateBatch(updatedBatch)
+                            ))
                         } else {
-                            val batchId = "BATCH-" + UUID.randomUUID().toString().take(8)
+                            targetBatchId = "BATCH-" + UUID.randomUUID().toString().take(8)
                             batchDao.insertBatch(BatchEntity(
-                                batchId = batchId, itemId = finalItemId ?: "", drugName = item.name, dosageForm = item.form,
+                                batchId = targetBatchId, itemId = finalItemId ?: "", drugName = item.name, dosageForm = item.form,
                                 company = item.company, originalOffer = offerString, currentQty = totalUnits, expiryDate = item.expiryDate,
                                 purchasePrice = item.purchasePrice, paidUnits = item.paidUnits, freeUnits = item.freeUnits,
                                 totalUnits = totalUnits, unitCost = effectiveUnitCost, salePrice = item.salePrice, clearancePrice = null,
                                 legacyBatchId = null, dataStatus = "جديدة"
                             ))
-
-                            stockMovementDao.insertMovement(StockMovementEntity(
-                                movementDate = System.currentTimeMillis(), movementType = "شراء", batchId = batchId,
-                                itemId = finalItemId, quantity = totalUnits, reference = invoiceNumber, note = "شراء من المورد: $supplierName"
-                            ))
                         }
+                        // حركة الشراء تُسجَّل في الحالتين (كانت تُسجَّل للدفعة الجديدة فقط)
+                        stockMovementDao.insertMovement(StockMovementEntity(
+                            movementDate = System.currentTimeMillis(), movementType = "شراء", batchId = targetBatchId,
+                            itemId = finalItemId, quantity = totalUnits, reference = invoiceNumber, note = "شراء من المورد: $supplierName"
+                        ))
                         if (finalItemId != null) itemDao.deductItemStock(finalItemId, -totalUnits)
                     }
 

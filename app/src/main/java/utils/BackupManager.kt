@@ -2,6 +2,8 @@ package com.example.myapplication.utils
 
 import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
+import android.database.sqlite.SQLiteDatabase
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -13,150 +15,262 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.IOException
+import java.io.InputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
+import kotlin.system.exitProcess
 
 object BackupManager {
 
-    // دالة إنشاء النسخة الاحتياطية (تشمل القاعدة + الصور)
+    private const val DB_ENTRY = AppDatabase.DB_NAME
+    private const val PRESCRIPTIONS_PREFIX = PrescriptionStorage.DIR_NAME + "/"
+    private const val MAX_TOTAL_BYTES = 2L * 1024 * 1024 * 1024 // سقف حجم الاستعادة (ضد Zip Bomb)
+
+    // أقل إصدار مسموح باستعادته. اخفضه فقط بعد كتابة Migrations للإصدارات الأقدم.
+    private const val MIN_SUPPORTED_DB_VERSION = AppDatabase.DB_VERSION
+
+    private val SQLITE_MAGIC = "SQLite format 3\u0000".toByteArray(Charsets.US_ASCII)
+
+    // ───────────────────────── إنشاء النسخة ─────────────────────────
     suspend fun createBackup(context: Context): Uri? = withContext(Dispatchers.IO) {
+        val appContext = context.applicationContext
+        var tempBackupFile: File? = null
         try {
-            val dbFile = context.getDatabasePath("my_pharmacy_db")
+            val dbFile = appContext.getDatabasePath(AppDatabase.DB_NAME)
             if (!dbFile.exists()) return@withContext null
 
-            // 1. إجبار قاعدة البيانات على حفظ البيانات
-            val db = AppDatabase.getDatabase(context)
-            db.openHelper.writableDatabase.query("PRAGMA wal_checkpoint(TRUNCATE)").close()
+            // إجبار WAL على الكتابة داخل ملف القاعدة
+            AppDatabase.getDatabase(appContext).openHelper.writableDatabase
+                .query("PRAGMA wal_checkpoint(TRUNCATE)")
+                .use { it.moveToFirst() }
 
             val backupFileName = "Pharmacy_Backup_${System.currentTimeMillis()}.zip"
-            val tempBackupFile = File(context.cacheDir, backupFileName)
-            val zipOutputStream = ZipOutputStream(FileOutputStream(tempBackupFile))
+            val tmp = File(appContext.cacheDir, backupFileName)
+            tempBackupFile = tmp
 
-            // 2. إضافة قاعدة البيانات
-            val fis = FileInputStream(dbFile)
-            zipOutputStream.putNextEntry(ZipEntry("my_pharmacy_db"))
-            fis.copyTo(zipOutputStream)
-            zipOutputStream.closeEntry()
-            fis.close()
+            ZipOutputStream(FileOutputStream(tmp).buffered()).use { zip ->
+                zip.putNextEntry(ZipEntry(DB_ENTRY))
+                FileInputStream(dbFile).use { it.copyTo(zip) }
+                zip.closeEntry()
 
-            // 3. إضافة صور الوصفات
-            val prescriptionsDir = File(context.filesDir, "prescriptions")
-            if (prescriptionsDir.exists()) {
+                val prescriptionsDir = File(appContext.filesDir, PrescriptionStorage.DIR_NAME)
                 prescriptionsDir.listFiles()?.forEach { file ->
                     if (file.isFile) {
-                        val fileFis = FileInputStream(file)
-                        zipOutputStream.putNextEntry(ZipEntry("prescriptions/${file.name}"))
-                        fileFis.copyTo(zipOutputStream)
-                        zipOutputStream.closeEntry()
-                        fileFis.close()
+                        zip.putNextEntry(ZipEntry(PRESCRIPTIONS_PREFIX + file.name))
+                        FileInputStream(file).use { it.copyTo(zip) }
+                        zip.closeEntry()
                     }
                 }
             }
-            zipOutputStream.close()
 
-            // 4. الحفظ في مجلد التنزيلات
-            val savedUri = saveToDownloads(context, tempBackupFile, backupFileName)
-            tempBackupFile.delete()
-
-            savedUri
+            saveToDownloads(appContext, tmp, backupFileName)
         } catch (e: Exception) {
             e.printStackTrace()
             null
+        } finally {
+            tempBackupFile?.delete()
         }
     }
 
-    // دالة استعادة النسخة الاحتياطية (آمنة - لا تحذف القديم حتى تتأكد من الجديد)
+    // ───────────────────────── الاستعادة ─────────────────────────
+    /**
+     * تعيد true عند النجاح. بعد النجاح يجب إعادة تشغيل التطبيق (استدعِ restartApp)
+     * لأن الـ DAOs الموجودة في الـ ViewModels كانت مرتبطة بالقاعدة القديمة المغلقة.
+     */
     suspend fun restoreBackup(context: Context, backupUri: Uri): Boolean = withContext(Dispatchers.IO) {
+        val appContext = context.applicationContext
+        val tempZip = File(appContext.cacheDir, "temp_restore.zip")
+        val staging = File(appContext.cacheDir, "restore_staging")
+        val dbFile = appContext.getDatabasePath(AppDatabase.DB_NAME)
+        val walFile = File(dbFile.path + "-wal")
+        val shmFile = File(dbFile.path + "-shm")
+        val bakFile = File(dbFile.path + ".bak")
+
+        var swapped = false
+        var committed = false
+
         try {
-            val tempFile = File(context.cacheDir, "temp_restore.zip")
-            context.contentResolver.openInputStream(backupUri)?.use { input ->
-                tempFile.outputStream().use { output -> input.copyTo(output) }
-            }
+            tempZip.delete()
+            staging.deleteRecursively()
+            staging.mkdirs()
 
-            if (!tempFile.exists()) return@withContext false
+            // 1. نسخ الملف المختار إلى مكان مؤقت
+            val input = appContext.contentResolver.openInputStream(backupUri)
+                ?: return@withContext false
+            input.use { i -> FileOutputStream(tempZip).use { o -> i.copyTo(o) } }
 
-            // 1. التحقق من محتويات الملف أولاً (هل يحتوي على قاعدة البيانات؟)
-            var hasValidDb = false
-            val checkStream = ZipInputStream(FileInputStream(tempFile))
-            var entry = checkStream.nextEntry
-            while (entry != null) {
-                if (entry.name == "my_pharmacy_db") {
-                    hasValidDb = true
-                    break
+            // 2. فك الضغط إلى مجلد مؤقت مع حماية Zip Slip وحد الحجم
+            val stagedDb = File(staging, "db.sqlite")
+            val stagedPrescriptions = File(staging, PrescriptionStorage.DIR_NAME).apply { mkdirs() }
+            var foundDb = false
+            var total = 0L
+
+            ZipInputStream(FileInputStream(tempZip).buffered()).use { zis ->
+                var entry: ZipEntry? = zis.nextEntry
+                while (entry != null) {
+                    val name = entry.name
+                    if (isUnsafeEntryName(name)) {
+                        throw SecurityException("Unsafe zip entry: $name")
+                    }
+                    if (!entry.isDirectory) {
+                        when {
+                            name == DB_ENTRY -> {
+                                total += copyLimited(zis, stagedDb, MAX_TOTAL_BYTES - total)
+                                foundDb = true
+                            }
+                            name.startsWith(PRESCRIPTIONS_PREFIX) -> {
+                                val fileName = name.removePrefix(PRESCRIPTIONS_PREFIX)
+                                val target = safeChild(stagedPrescriptions, fileName)
+                                    ?: throw SecurityException("Unsafe zip entry: $name")
+                                total += copyLimited(zis, target, MAX_TOTAL_BYTES - total)
+                            }
+                            // أي ملف آخر يُتجاهل
+                        }
+                    }
+                    zis.closeEntry()
+                    entry = zis.nextEntry
                 }
-                entry = checkStream.nextEntry
             }
-            checkStream.close()
 
-            // إذا لم نجد قاعدة البيانات في الملف، نوقف العملية فوراً
-            if (!hasValidDb) {
-                tempFile.delete()
+            // 3. التحقق من القاعدة المُستخرجة قبل لمس القاعدة الحالية
+            if (!foundDb) return@withContext false
+            if (!hasSqliteHeader(stagedDb)) return@withContext false
+            if (!isCompatibleDatabase(stagedDb)) return@withContext false
+
+            // 4. نقل الصور (إضافة/استبدال بنفس الاسم فقط، لا يحذف شيئاً)
+            val prescriptionsDir = PrescriptionStorage.dir(appContext)
+            stagedPrescriptions.listFiles()?.forEach { f ->
+                if (f.isFile) f.copyTo(File(prescriptionsDir, f.name), overwrite = true)
+            }
+
+            // 5. حفظ القديمة كـ .bak ثم وضع الجديدة
+            AppDatabase.getDatabase(appContext).openHelper.writableDatabase
+                .query("PRAGMA wal_checkpoint(TRUNCATE)")
+                .use { it.moveToFirst() }
+            AppDatabase.closeAndReset()
+
+            if (bakFile.exists()) bakFile.delete()
+            if (dbFile.exists() && !dbFile.renameTo(bakFile)) return@withContext false
+            swapped = true
+
+            walFile.delete()
+            shmFile.delete()
+            stagedDb.copyTo(dbFile, overwrite = true)
+
+            // 6. التحقق عبر Room نفسه (يفحص المخطط والسلامة)
+            val verified = try {
+                AppDatabase.getDatabase(appContext).openHelper.writableDatabase
+                    .query("PRAGMA quick_check")
+                    .use { c -> c.moveToFirst() && c.getString(0) == "ok" }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                false
+            }
+
+            if (!verified) {
+                rollbackDatabase(dbFile, walFile, shmFile, bakFile)
+                swapped = false
                 return@withContext false
             }
 
-            // 2. الآن فقط، نغلق القاعدة ونأخذ نسخة احتياطية للملف القديم
-            val dbFile = context.getDatabasePath("my_pharmacy_db")
-            val walFile = File(dbFile.path + "-wal")
-            val shmFile = File(dbFile.path + "-shm")
-            val backupDbFile = File(dbFile.path + ".bak")
-
-            AppDatabase.getDatabase(context).close()
-
-            // إعادة تسمية الملف القديم إلى .bak بدلاً من حذفه
-            if (dbFile.exists()) {
-                if (backupDbFile.exists()) backupDbFile.delete()
-                dbFile.renameTo(backupDbFile)
-            }
-            if (walFile.exists()) walFile.delete()
-            if (shmFile.exists()) shmFile.delete()
-
-            // 3. فك الضغط
-            val inputStream = FileInputStream(tempFile)
-            val zipInputStream = ZipInputStream(inputStream)
-            val prescriptionsDir = File(context.filesDir, "prescriptions")
-            if (!prescriptionsDir.exists()) prescriptionsDir.mkdirs()
-
-            var entry2 = zipInputStream.nextEntry
-            var foundDb = false
-            while (entry2 != null) {
-                when {
-                    entry2.name == "my_pharmacy_db" -> {
-                        foundDb = true
-                        val outputStream = FileOutputStream(dbFile)
-                        zipInputStream.copyTo(outputStream)
-                        outputStream.close()
-                    }
-                    entry2.name.startsWith("prescriptions/") -> {
-                        val fileName = entry2.name.substringAfter("prescriptions/")
-                        if (fileName.isNotEmpty()) {
-                            val file = File(prescriptionsDir, fileName)
-                            val outputStream = FileOutputStream(file)
-                            zipInputStream.copyTo(outputStream)
-                            outputStream.close()
-                        }
-                    }
-                }
-                zipInputStream.closeEntry()
-                entry2 = zipInputStream.nextEntry
-            }
-            zipInputStream.close()
-            inputStream.close()
-            tempFile.delete()
-
-            // 4. إذا نجحت العملية، نحذف ملف الـ .bak
-            if (foundDb && backupDbFile.exists()) {
-                backupDbFile.delete()
-            }
-
-            foundDb
+            committed = true
+            bakFile.delete()
+            true
         } catch (e: Exception) {
             e.printStackTrace()
+            if (swapped && !committed) {
+                try {
+                    rollbackDatabase(dbFile, walFile, shmFile, bakFile)
+                } catch (re: Exception) {
+                    re.printStackTrace()
+                }
+            }
             false
+        } finally {
+            tempZip.delete()
+            staging.deleteRecursively()
         }
     }
 
-    // دالة مساعدة للحفظ في التنزيلات (تدعم كل إصدارات أندرويد)
+    /** يعيد تشغيل التطبيق بعد استعادة ناجحة. */
+    fun restartApp(context: Context) {
+        val appContext = context.applicationContext
+        val intent = appContext.packageManager.getLaunchIntentForPackage(appContext.packageName)
+            ?.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK) }
+        if (intent != null) appContext.startActivity(intent)
+        exitProcess(0)
+    }
+
+    // ───────────────────────── دوال مساعدة ─────────────────────────
+    private fun rollbackDatabase(dbFile: File, walFile: File, shmFile: File, bakFile: File) {
+        AppDatabase.closeAndReset()
+        dbFile.delete()
+        walFile.delete()
+        shmFile.delete()
+        if (bakFile.exists()) bakFile.renameTo(dbFile)
+    }
+
+    private fun isUnsafeEntryName(name: String): Boolean {
+        if (name.isEmpty() || name.startsWith("/") || name.startsWith("\\") || name.contains('\u0000')) {
+            return true
+        }
+        return name.replace('\\', '/').split('/').any { it == ".." }
+    }
+
+    /** يعيد ملفاً مسطحاً داخل baseDir فقط، أو null إن كان الاسم خطراً. */
+    private fun safeChild(baseDir: File, fileName: String): File? {
+        if (fileName.isEmpty() || fileName != File(fileName).name) return null
+        val base = baseDir.canonicalFile
+        val target = File(base, fileName).canonicalFile
+        return if (target.path.startsWith(base.path + File.separator)) target else null
+    }
+
+    private fun copyLimited(input: InputStream, dest: File, remaining: Long): Long {
+        if (remaining <= 0) throw IOException("Backup too large")
+        var written = 0L
+        FileOutputStream(dest).use { out ->
+            val buffer = ByteArray(8 * 1024)
+            while (true) {
+                val n = input.read(buffer)
+                if (n < 0) break
+                written += n
+                if (written > remaining) throw IOException("Backup too large")
+                out.write(buffer, 0, n)
+            }
+        }
+        return written
+    }
+
+    private fun hasSqliteHeader(file: File): Boolean = try {
+        FileInputStream(file).use { fis ->
+            val header = ByteArray(SQLITE_MAGIC.size)
+            var read = 0
+            while (read < header.size) {
+                val n = fis.read(header, read, header.size - read)
+                if (n < 0) break
+                read += n
+            }
+            read == header.size && header.contentEquals(SQLITE_MAGIC)
+        }
+    } catch (e: Exception) {
+        false
+    }
+
+    /** يفتح النسخة المؤقتة ويفحص السلامة والإصدار. */
+    private fun isCompatibleDatabase(file: File): Boolean = try {
+        SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+            val intact = db.rawQuery("PRAGMA quick_check", null)
+                .use { c -> c.moveToFirst() && c.getString(0) == "ok" }
+            val version = db.version
+            intact && version in MIN_SUPPORTED_DB_VERSION..AppDatabase.DB_VERSION
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+        false
+    }
+
     private fun saveToDownloads(context: Context, file: File, fileName: String): Uri? {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val values = ContentValues().apply {

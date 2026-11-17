@@ -71,6 +71,7 @@ dependencies {
     implementation("androidx.paging:paging-runtime:3.2.1")
     implementation("androidx.paging:paging-compose:3.2.1")
     implementation(libs.androidx.room.paging)
+    androidTestImplementation("androidx.room:room-testing:2.8.4")
 }
 // 👇 إعدادات Room لتصدير المخطط (لحماية البيانات)
 ksp {
