@@ -24,7 +24,7 @@ import kotlinx.coroutines.launch
         AuditLogEntity::class
     ],
     version = 6,
-    exportSchema = false
+    exportSchema = true // 👈 تفعيل تصدير المخطط (لحماية البيانات مستقبلاً)
 )
 abstract class AppDatabase : RoomDatabase() {
     // ربط الـ DAOs
@@ -36,7 +36,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun expenseDao(): ExpenseDao
     abstract fun settingDao(): SettingDao
     abstract fun auditLogDao(): AuditLogDao
-    abstract fun dashboardDao(): DashboardDao // <--- تمت الإضافة هنا
+    abstract fun dashboardDao(): DashboardDao
     abstract fun companyDao(): CompanyDao
     abstract fun reportDao(): ReportDao
 
@@ -49,20 +49,28 @@ abstract class AppDatabase : RoomDatabase() {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
-                    "my_pharmacy_db" // تأكد من الاسم
+                    "my_pharmacy_db"
                 )
-                    .fallbackToDestructiveMigration() // 👈 ضروري لأننا رفعنا الإصدار لـ 6
+                    // 👈 تم حذف .fallbackToDestructiveMigration() نهائياً
                     .addCallback(object : RoomDatabase.Callback() {
                         override fun onCreate(db: SupportSQLiteDatabase) {
                             super.onCreate(db)
-                            CoroutineScope(Dispatchers.IO).launch {
-                                INSTANCE?.companyDao()?.populateCompaniesFromItems()
+                            // إصلاح: استخدام instance مباشرة بدلاً من INSTANCE
+                            val instance = INSTANCE
+                            if (instance != null) {
+                                CoroutineScope(Dispatchers.IO).launch {
+                                    instance.companyDao().populateCompaniesFromItems()
+                                }
                             }
                         }
                         override fun onOpen(db: SupportSQLiteDatabase) {
                             super.onOpen(db)
-                            CoroutineScope(Dispatchers.IO).launch {
-                                INSTANCE?.companyDao()?.populateCompaniesFromItems()
+                            // إصلاح: استخدام instance مباشرة بدلاً من INSTANCE
+                            val instance = INSTANCE
+                            if (instance != null) {
+                                CoroutineScope(Dispatchers.IO).launch {
+                                    instance.companyDao().populateCompaniesFromItems()
+                                }
                             }
                         }
                     })

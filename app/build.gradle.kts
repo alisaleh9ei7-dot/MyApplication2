@@ -72,3 +72,7 @@ dependencies {
     implementation("androidx.paging:paging-compose:3.2.1")
     implementation(libs.androidx.room.paging)
 }
+// 👇 إعدادات Room لتصدير المخطط (لحماية البيانات)
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
