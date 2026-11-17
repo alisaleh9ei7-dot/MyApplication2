@@ -372,7 +372,8 @@ fun InvoiceDetailsContent(
 
 fun openPrescriptionImage(context: Context, imagePath: String) {
     try {
-        val file = File(imagePath)
+        val file = com.example.myapplication.utils.PrescriptionStorage.resolve(context, imagePath)
+            ?: throw java.io.FileNotFoundException()
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, "image/*")

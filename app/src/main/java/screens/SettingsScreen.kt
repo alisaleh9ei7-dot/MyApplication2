@@ -67,7 +67,9 @@ fun SettingsScreen(viewModel: PharmacyViewModel) {
                 val success = BackupManager.restoreBackup(context, uri)
                 isRestoring = false
                 if (success) {
-                    Toast.makeText(context, "تمت الاستعادة بنجاح! يرجى إعادة تشغيل التطبيق.", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, "تمت الاستعادة بنجاح! سيُعاد تشغيل التطبيق.", Toast.LENGTH_LONG).show()
+                    kotlinx.coroutines.delay(1500)
+                    BackupManager.restartApp(context)
                 } else {
                     Toast.makeText(context, "فشلت الاستعادة. تأكد من صحة الملف.", Toast.LENGTH_LONG).show()
                 }
