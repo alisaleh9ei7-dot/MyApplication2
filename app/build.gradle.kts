@@ -35,6 +35,11 @@ android {
     buildFeatures {
         compose = true
     }
+
+    // إتاحة مخططات Room لاختبارات MigrationTestHelper.
+    sourceSets {
+        getByName("androidTest").assets.srcDir("$projectDir/schemas")
+    }
 }
 
 dependencies {

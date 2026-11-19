@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.myapplication.data.local.dao.*
 import com.example.myapplication.data.local.entity.*
 import kotlinx.coroutines.CoroutineScope
@@ -41,7 +43,17 @@ abstract class AppDatabase : RoomDatabase() {
 
     companion object {
         const val DB_NAME = "my_pharmacy_db"
-        const val DB_VERSION = 6
+        const val DB_VERSION = 7
+
+        /** ترحيل محافظ من Room 6 إلى Room 7؛ السجلات القديمة تبقى بقيمة NULL. */
+        @JvmField
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "ALTER TABLE `sales_history` ADD COLUMN `listAmount` REAL"
+                )
+            }
+        }
 
         @Volatile
         private var INSTANCE: AppDatabase? = null
@@ -69,6 +81,7 @@ abstract class AppDatabase : RoomDatabase() {
 
         private fun buildDatabase(appContext: Context): AppDatabase =
             Room.databaseBuilder(appContext, AppDatabase::class.java, DB_NAME)
+                .addMigrations(MIGRATION_6_7)
                 // لا fallbackToDestructiveMigration: أي تغيير في المخطط يحتاج Migration صريح
                 .build()
 

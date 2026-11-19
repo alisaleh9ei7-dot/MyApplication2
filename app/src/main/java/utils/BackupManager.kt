@@ -29,7 +29,7 @@ object BackupManager {
     private const val MAX_TOTAL_BYTES = 2L * 1024 * 1024 * 1024 // سقف حجم الاستعادة (ضد Zip Bomb)
 
     // أقل إصدار مسموح باستعادته. اخفضه فقط بعد كتابة Migrations للإصدارات الأقدم.
-    private const val MIN_SUPPORTED_DB_VERSION = AppDatabase.DB_VERSION
+    private const val MIN_SUPPORTED_DB_VERSION = 6
 
     private val SQLITE_MAGIC = "SQLite format 3\u0000".toByteArray(Charsets.US_ASCII)
 

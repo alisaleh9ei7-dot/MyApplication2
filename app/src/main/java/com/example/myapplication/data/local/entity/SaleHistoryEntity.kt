@@ -37,4 +37,6 @@ data class SaleHistoryEntity(
     val invoiceRef: String?,          // ملاحظة الاستيراد أو رقم الفاتورة
     val customerName: String? = null,
     val prescriptionImagePath: String? = null,
+    /** المبلغ الأصلي قبل تعديل إجمالي الفاتورة؛ NULL للسجلات السابقة لـ Room 7. */
+    val listAmount: Double? = null,
 )
