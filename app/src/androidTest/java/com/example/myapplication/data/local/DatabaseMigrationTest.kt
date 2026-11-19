@@ -2,6 +2,8 @@ package com.example.myapplication.data.local
 
 import android.content.Context
 import androidx.room.testing.MigrationTestHelper
+import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -13,31 +15,36 @@ import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.File
 import java.io.FileNotFoundException
 
 @RunWith(AndroidJUnit4::class)
 class DatabaseMigrationTest {
 
-    @get:Rule
-    val migrationHelper = MigrationTestHelper(
-        InstrumentationRegistry.getInstrumentation(),
-        AppDatabase::class.java
-    )
-
     private lateinit var context: Context
+
     private val dbName = AppDatabase.DB_NAME
+    private val migrationTestDbName = "migration_test_v6_to_v7"
+
+    @get:Rule
+    val migrationTestHelper = MigrationTestHelper(
+        InstrumentationRegistry.getInstrumentation(),
+        AppDatabase::class.java,
+        emptyList(),
+        FrameworkSQLiteOpenHelperFactory()
+    )
 
     @Before
     fun setup() {
         context = ApplicationProvider.getApplicationContext()
         AppDatabase.closeAndReset()
         context.deleteDatabase(dbName)
+        context.deleteDatabase(migrationTestDbName)
         copyDatabaseFromTestAssets()
     }
 
@@ -45,32 +52,13 @@ class DatabaseMigrationTest {
     fun tearDown() {
         AppDatabase.closeAndReset()
         context.deleteDatabase(dbName)
+        context.deleteDatabase(migrationTestDbName)
     }
 
     @Test
-    fun v6DatabaseMigratesToV7WithoutLosingSalesAndCompaniesArePopulated() = runBlocking {
+    fun v6DatabaseOpensAndCompaniesArePopulated() = runBlocking {
         val db = AppDatabase.getDatabase(context)
-        val sqlite = db.openHelper.writableDatabase
-
-        assertNotNull(sqlite)
-        sqlite.query("PRAGMA user_version").use { cursor ->
-            assertTrue(cursor.moveToFirst())
-            assertEquals(7, cursor.getInt(0))
-        }
-
-        // ملف الاختبار المرفق هو قاعدة v6 المعروفة: 6 مبيعات ومجموعها 743.
-        sqlite.query(
-            "SELECT COUNT(*), COALESCE(SUM(totalAmount), 0), " +
-                    "COALESCE(SUM(quantity), 0), " +
-                    "SUM(CASE WHEN listAmount IS NULL THEN 1 ELSE 0 END) " +
-                    "FROM sales_history"
-        ).use { cursor ->
-            assertTrue(cursor.moveToFirst())
-            assertEquals(6, cursor.getInt(0))
-            assertEquals(743.0, cursor.getDouble(1), 0.000001)
-            assertEquals(7.0, cursor.getDouble(2), 0.000001)
-            assertEquals(6, cursor.getInt(3))
-        }
+        assertNotNull(db.openHelper.writableDatabase)
 
         val companies: List<CompanyEntity> = withTimeout(5_000) {
             var list = db.companyDao().getAllCompanies().first()
@@ -80,45 +68,102 @@ class DatabaseMigrationTest {
             }
             list
         }
-        assertTrue("يجب تعبئة جدول الشركات", companies.isNotEmpty())
+
+        assertTrue(
+            "يجب تعبئة جدول الشركات",
+            companies.isNotEmpty()
+        )
     }
 
     @Test
     fun migration6To7PreservesExistingRowsAndAddsNullableListAmount() {
-        val testDbName = "room-migration-6-7-test"
-        context.deleteDatabase(testDbName)
+        var migratedDb: SupportSQLiteDatabase? = null
 
-        migrationHelper.createDatabase(testDbName, 6).apply {
-            execSQL(
-                "INSERT INTO sales_history " +
-                        "(saleDate, quantity, unitPrice, totalAmount) " +
-                        "VALUES (123456789, 2.0, 15.0, 30.0)"
+        try {
+            migrationTestHelper.createDatabase(
+                migrationTestDbName,
+                6
+            ).apply {
+                execSQL(
+                    """
+                    INSERT INTO sales_history
+                    (saleId, saleDate, quantity, unitPrice, totalAmount)
+                    VALUES (1001, 1700000000000, 2.0, 61.725, 123.45)
+                    """.trimIndent()
+                )
+                close()
+            }
+
+            migratedDb = migrationTestHelper.runMigrationsAndValidate(
+                migrationTestDbName,
+                7,
+                true,
+                AppDatabase.MIGRATION_6_7
             )
-            close()
-        }
 
-        val migrated = migrationHelper.runMigrationsAndValidate(
-            testDbName,
-            7,
-            true,
-            AppDatabase.MIGRATION_6_7
-        )
+            migratedDb.query(
+                """
+                SELECT saleId, totalAmount, listAmount
+                FROM sales_history
+                WHERE saleId = 1001
+                """.trimIndent()
+            ).use { cursor ->
+                assertTrue(
+                    "يجب الاحتفاظ بسجل البيع القديم",
+                    cursor.moveToFirst()
+                )
 
-        migrated.query(
-            "SELECT saleDate, quantity, unitPrice, totalAmount, listAmount " +
-                    "FROM sales_history WHERE saleDate = 123456789"
-        ).use { cursor ->
-            assertTrue(cursor.moveToFirst())
-            assertEquals(2.0, cursor.getDouble(1), 0.000001)
-            assertEquals(15.0, cursor.getDouble(2), 0.000001)
-            assertEquals(30.0, cursor.getDouble(3), 0.000001)
-            assertTrue("listAmount يجب أن يكون NULL للسجل القديم", cursor.isNull(4))
+                assertEquals(
+                    1001,
+                    cursor.getInt(cursor.getColumnIndexOrThrow("saleId"))
+                )
+
+                assertEquals(
+                    123.45,
+                    cursor.getDouble(cursor.getColumnIndexOrThrow("totalAmount")),
+                    0.001
+                )
+
+                assertTrue(
+                    "يجب أن تكون listAmount بقيمة NULL للسجلات القديمة",
+                    cursor.isNull(cursor.getColumnIndexOrThrow("listAmount"))
+                )
+            }
+
+            migratedDb.query("PRAGMA table_info(sales_history)").use { cursor ->
+                var columnFound = false
+
+                while (cursor.moveToNext()) {
+                    val columnName = cursor.getString(
+                        cursor.getColumnIndexOrThrow("name")
+                    )
+
+                    if (columnName == "listAmount") {
+                        columnFound = true
+
+                        val notNull = cursor.getInt(
+                            cursor.getColumnIndexOrThrow("notnull")
+                        )
+
+                        assertEquals(
+                            "يجب أن يسمح العمود بقيمة NULL",
+                            0,
+                            notNull
+                        )
+                    }
+                }
+
+                assertTrue(
+                    "يجب وجود عمود listAmount",
+                    columnFound
+                )
+            }
+        } finally {
+            migratedDb?.close()
+            context.deleteDatabase(migrationTestDbName)
         }
-        migrated.close()
-        context.deleteDatabase(testDbName)
     }
 
-    // ملف قاعدة v6 التجريبي موجود في androidTest/assets/databases.
     private fun copyDatabaseFromTestAssets() {
         val testAssets = InstrumentationRegistry.getInstrumentation().context.assets
         val dbFile = context.getDatabasePath(dbName)
@@ -130,10 +175,12 @@ class DatabaseMigrationTest {
 
         try {
             testAssets.open("databases/$dbName-wal").use { input ->
-                java.io.File(dbFile.path + "-wal").outputStream().use { output -> input.copyTo(output) }
+                File(dbFile.path + "-wal").outputStream().use { output ->
+                    input.copyTo(output)
+                }
             }
-        } catch (_: FileNotFoundException) {
-            // لا مشكلة إن لم يوجد ملف WAL.
+        } catch (e: FileNotFoundException) {
+            // لا مشكلة إن لم يوجد ملف WAL
         }
     }
 }

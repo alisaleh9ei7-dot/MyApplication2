@@ -1,12 +1,12 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
-    alias(libs.plugins.ksp) // استخدمنا الاختصار من ملف الإصدارات
+    alias(libs.plugins.ksp)
 }
 
 android {
     namespace = "com.example.myapplication"
-    compileSdk = 37 // متوافق مع AGP 9.4.0
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.example.myapplication"
@@ -20,13 +20,14 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false // الوضع الافتراضي لتفادي مشاكل الإصدارات
+            isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
         }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -36,7 +37,6 @@ android {
         compose = true
     }
 
-    // إتاحة مخططات Room لاختبارات MigrationTestHelper.
     sourceSets {
         getByName("androidTest").assets.srcDir("$projectDir/schemas")
     }
@@ -44,6 +44,11 @@ android {
 
 dependencies {
     implementation(platform(libs.androidx.compose.bom))
+
+    // توحيد Kotlin Serialization على 1.8.1
+    implementation(platform("org.jetbrains.kotlinx:kotlinx-serialization-bom:1.8.1"))
+    androidTestImplementation(platform("org.jetbrains.kotlinx:kotlinx-serialization-bom:1.8.1"))
+
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.ui)
@@ -60,7 +65,6 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
 
-    // مكتبات Room (سحبناها من ملف الإصدارات)
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
@@ -76,9 +80,10 @@ dependencies {
     implementation("androidx.paging:paging-runtime:3.2.1")
     implementation("androidx.paging:paging-compose:3.2.1")
     implementation(libs.androidx.room.paging)
+
     androidTestImplementation("androidx.room:room-testing:2.8.4")
 }
-// 👇 إعدادات Room لتصدير المخطط (لحماية البيانات)
+
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
