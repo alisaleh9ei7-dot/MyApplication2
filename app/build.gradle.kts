@@ -47,7 +47,6 @@ dependencies {
 
     // توحيد Kotlin Serialization على 1.8.1
     implementation(platform("org.jetbrains.kotlinx:kotlinx-serialization-bom:1.8.1"))
-    androidTestImplementation(platform("org.jetbrains.kotlinx:kotlinx-serialization-bom:1.8.1"))
 
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)
