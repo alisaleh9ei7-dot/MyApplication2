@@ -18,6 +18,7 @@ import androidx.paging.PagingData
 import androidx.paging.cachedIn
 import androidx.room.withTransaction
 import com.example.myapplication.utils.PrescriptionStorage
+import com.example.myapplication.utils.ExpiryDatePolicy
 
 data class DashboardStats(
     val todaySales: Double = 0.0,
@@ -104,8 +105,8 @@ class PharmacyViewModel(
 
     fun loadNearExpiryReport() {
         viewModelScope.launch(Dispatchers.IO) {
-            val today = System.currentTimeMillis()
-            val futureDate = today + (90L * 24 * 60 * 60 * 1000)
+            val today = ExpiryDatePolicy.todayDateKey()
+            val futureDate = ExpiryDatePolicy.addDays(today, 90)
             val result = reportDao.getNearExpiryBatches(today, futureDate)
             withContext(Dispatchers.Main) { _nearExpiryReport.value = result }
         }
@@ -130,7 +131,7 @@ class PharmacyViewModel(
 
     fun loadExpiredReport() {
         viewModelScope.launch(Dispatchers.IO) {
-            val today = System.currentTimeMillis()
+            val today = ExpiryDatePolicy.todayDateKey()
             val result = reportDao.getExpiredBatches(today)
             withContext(Dispatchers.Main) { _expiredReport.value = result }
         }
@@ -179,15 +180,16 @@ class PharmacyViewModel(
             val endOfToday = now.apply { set(Calendar.HOUR_OF_DAY, 23); set(Calendar.MINUTE, 59); set(Calendar.SECOND, 59); set(Calendar.MILLISECOND, 999) }.timeInMillis
             val startOfMonth = now.apply { set(Calendar.DAY_OF_MONTH, 1); set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0) }.timeInMillis
             val monthKey = SimpleDateFormat("yyyyMM", Locale.US).format(Date()).toLongOrNull() ?: 0L
-            val futureDate = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, 90) }.timeInMillis
+            val expiryToday = ExpiryDatePolicy.todayDateKey()
+            val expiryFutureDate = ExpiryDatePolicy.addDays(expiryToday, 90)
 
             val stats = DashboardStats(
                 todaySales = dashboardDao.getSalesBetween(startOfToday, endOfToday) ?: 0.0,
                 todayProfit = dashboardDao.getProfitBetween(startOfToday, endOfToday) ?: 0.0,
-                inventoryValue = dashboardDao.getTotalInventoryValue(System.currentTimeMillis()) ?: 0.0,
+                inventoryValue = dashboardDao.getTotalInventoryValue(expiryToday) ?: 0.0,
                 monthExpenses = dashboardDao.getExpensesForMonth(monthKey) ?: 0.0,
                 lowStockCount = dashboardDao.getLowStockCount(),
-                expiringSoonCount = dashboardDao.getExpiringSoonCount(startOfToday, futureDate),
+                expiringSoonCount = dashboardDao.getExpiringSoonCount(expiryToday, expiryFutureDate),
                 monthSales = dashboardDao.getSalesBetween(startOfMonth, endOfToday) ?: 0.0,
                 monthProfit = dashboardDao.getProfitBetween(startOfMonth, endOfToday) ?: 0.0,
                 monthOfferProfit = dashboardDao.getOfferProfitBetween(startOfMonth, endOfToday) ?: 0.0
@@ -239,8 +241,8 @@ class PharmacyViewModel(
 
     fun loadExpiryFilters() {
         viewModelScope.launch(Dispatchers.IO) {
-            val today = System.currentTimeMillis()
-            val futureDate = today + (90L * 24 * 60 * 60 * 1000)
+            val today = ExpiryDatePolicy.todayDateKey()
+            val futureDate = ExpiryDatePolicy.addDays(today, 90)
             val expired = itemDao.getItemsWithExpiredBatches(today)
             val expiring = itemDao.getItemsWithExpiringBatches(today, futureDate)
             withContext(Dispatchers.Main) {
@@ -456,7 +458,8 @@ class PharmacyViewModel(
                     for ((item, cartQty) in cart) {
                         var left = cartQty.toDouble()
 
-                        for (batch in batchDao.getSellableBatchesSync(item.itemId, now)) {
+                        val expiryToday = ExpiryDatePolicy.todayDateKey(now)
+                        for (batch in batchDao.getSellableBatchesSync(item.itemId, expiryToday)) {
                             if (left <= 0.0) break
                             val take = minOf(batch.currentQty, left)
 

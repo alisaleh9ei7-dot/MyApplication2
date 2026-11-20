@@ -33,7 +33,7 @@ interface BatchDao {
     @Query("UPDATE batches SET salePrice = :newPrice WHERE itemId = :itemId")
     suspend fun updateSellingPriceForItem(itemId: String, newPrice: Double)
 
-    @Query("SELECT * FROM batches WHERE itemId = :itemId AND currentQty > 0 AND expiryDate > :now ORDER BY expiryDate ASC")
+    @Query("SELECT * FROM batches WHERE itemId = :itemId AND currentQty > 0 AND expiryDate >= :now ORDER BY expiryDate ASC")
     suspend fun getSellableBatchesSync(itemId: String, now: Long): List<BatchEntity>
 
     @Query("UPDATE batches SET currentQty = currentQty - :qty WHERE batchId = :batchId AND currentQty >= :qty")
