@@ -29,6 +29,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import com.example.myapplication.utils.ExpiryDatePolicy
+import java.util.TimeZone
 
 // أنواع الترتيب والفلترة
 enum class SortOption(val title: String) {
@@ -221,8 +222,13 @@ fun InventoryItemCard(item: ItemEntity, viewModel: PharmacyViewModel) {
     var showPriceDialog by remember { mutableStateOf(false) }
     var batchToWriteOff by remember { mutableStateOf<BatchEntity?>(null) }
 
-    val dateFormatFull = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-    val dateFormatShort = SimpleDateFormat("MM-yyyy", Locale.US)
+    val dateFormatFull = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
+        timeZone = TimeZone.getTimeZone("UTC")
+    }
+
+    val dateFormatShort = SimpleDateFormat("MM-yyyy", Locale.US).apply {
+        timeZone = TimeZone.getTimeZone("UTC")
+    }
 
     val isLowStock = item.currentStock <= item.reorderLevel
     val isExpired = nearestExpiry != null && nearestExpiry < todayExpiryKey

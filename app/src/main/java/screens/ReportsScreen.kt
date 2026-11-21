@@ -131,7 +131,9 @@ fun MovementReportUI(viewModel: PharmacyViewModel) {
 @Composable
 fun NearExpiryReportUI(viewModel: PharmacyViewModel) {
     val nearExpiryData by viewModel.nearExpiryReport.collectAsState()
-    val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+    val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
+        timeZone = TimeZone.getTimeZone("UTC")
+    }
     LaunchedEffect(Unit) { viewModel.loadNearExpiryReport() }
 
     Column {
@@ -159,7 +161,9 @@ fun NearExpiryReportUI(viewModel: PharmacyViewModel) {
 @Composable
 fun ExpiredReportUI(viewModel: PharmacyViewModel) {
     val expiredData by viewModel.expiredReport.collectAsState()
-    val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+    val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
+        timeZone = TimeZone.getTimeZone("UTC")
+    }
     LaunchedEffect(Unit) { viewModel.loadExpiredReport() }
 
     Column {
