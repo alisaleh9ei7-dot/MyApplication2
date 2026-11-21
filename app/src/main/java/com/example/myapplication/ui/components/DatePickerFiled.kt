@@ -9,6 +9,7 @@ import androidx.compose.ui.Modifier
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -19,7 +20,9 @@ fun DatePickerField(
 ) {
     var showDialog by remember { mutableStateOf(false) }
     val datePickerState = rememberDatePickerState(initialSelectedDateMillis = initialDate)
-    val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+    val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
+        timeZone = TimeZone.getTimeZone("UTC")
+    }
     val displayDate = dateFormat.format(Date(initialDate))
 
     OutlinedTextField(

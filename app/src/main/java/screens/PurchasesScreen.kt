@@ -33,6 +33,7 @@ import com.example.myapplication.ui.components.DatePickerField
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.flow.first
+import com.example.myapplication.utils.ExpiryDatePolicy
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -263,7 +264,9 @@ fun AddPurchaseDetailsCard(
     var purchasePrice by remember { mutableStateOf("") }
     var salePrice by remember { mutableStateOf("") }
     var clearancePrice by remember { mutableStateOf("") }
-    var expiryLong by remember { mutableStateOf(System.currentTimeMillis() + 365L * 24 * 60 * 60 * 1000) }
+    var expiryLong by remember {
+        mutableStateOf(ExpiryDatePolicy.addDays(ExpiryDatePolicy.todayDateKey(), 365))
+    }
     var barcode by remember { mutableStateOf(item.barcode ?: "") }
 
     LaunchedEffect(Unit) {

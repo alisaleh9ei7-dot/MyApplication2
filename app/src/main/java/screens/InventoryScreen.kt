@@ -28,6 +28,7 @@ import com.example.myapplication.ui.PharmacyViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.example.myapplication.utils.ExpiryDatePolicy
 
 // أنواع الترتيب والفلترة
 enum class SortOption(val title: String) {
@@ -214,6 +215,7 @@ fun InventoryItemCard(item: ItemEntity, viewModel: PharmacyViewModel) {
     val salePrice = displayBatches.firstOrNull()?.salePrice ?: 0.0
     val purchasePrice = displayBatches.firstOrNull()?.purchasePrice ?: 0.0
     val nearestExpiry = displayBatches.minByOrNull { it.expiryDate }?.expiryDate
+    val todayExpiryKey = ExpiryDatePolicy.todayDateKey()
 
     var showReorderDialog by remember { mutableStateOf(false) }
     var showPriceDialog by remember { mutableStateOf(false) }
@@ -223,7 +225,7 @@ fun InventoryItemCard(item: ItemEntity, viewModel: PharmacyViewModel) {
     val dateFormatShort = SimpleDateFormat("MM-yyyy", Locale.US)
 
     val isLowStock = item.currentStock <= item.reorderLevel
-    val isExpired = nearestExpiry != null && nearestExpiry < System.currentTimeMillis()
+    val isExpired = nearestExpiry != null && nearestExpiry < todayExpiryKey
 
     // لون الشريط الجانبي
     val statusColor = when {
@@ -361,7 +363,11 @@ fun InventoryItemCard(item: ItemEntity, viewModel: PharmacyViewModel) {
                                     Row(modifier = Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                         Column {
                                             val expiryStr = if (batch.expiryDate > 0) dateFormatFull.format(Date(batch.expiryDate)) else "-"
-                                            Text("صلاحية: $expiryStr", fontSize = 10.sp, color = if (batch.expiryDate < System.currentTimeMillis()) Color.Red else Color.DarkGray)
+                                            Text(
+                                                "صلاحية: $expiryStr",
+                                                fontSize = 10.sp,
+                                                color = if (batch.expiryDate < todayExpiryKey) Color.Red else Color.DarkGray
+                                            )
                                             Text("الكمية: ${batch.currentQty} | السعر: ${batch.salePrice}", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                                         }
                                         IconButton(
