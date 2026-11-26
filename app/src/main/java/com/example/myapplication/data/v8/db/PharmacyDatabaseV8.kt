@@ -424,45 +424,86 @@ abstract class PharmacyDatabaseV8 : RoomDatabase() {
          */
         private fun ensureTriggers(db: SupportSQLiteDatabase) {
             val expected = TRIGGERS.associateBy(::triggerName)
-            check(expected.size == TRIGGERS.size) { "Duplicate V8 trigger name" }
-
-            val existing = mutableMapOf<String, String>()
-            db.query("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND name NOT LIKE 'sqlite_%'").use { cursor ->
-                val nameIndex = cursor.getColumnIndexOrThrow("name")
-                val sqlIndex = cursor.getColumnIndexOrThrow("sql")
-                while (cursor.moveToNext()) {
-                    existing[cursor.getString(nameIndex)] = cursor.getString(sqlIndex)
-                }
+            check(expected.size == TRIGGERS.size) {
+                "Duplicate V8 trigger name"
             }
-
-            val unknown = existing.keys - expected.keys
-            check(unknown.isEmpty()) { "Unexpected persistent V8 triggers: ${unknown.sorted()}" }
 
             db.beginTransaction()
             try {
+                // قراءة المشغلات الحالية داخل المعاملة.
+                val existing = mutableMapOf<String, String>()
+                db.query(
+                    """
+            SELECT name, sql
+            FROM sqlite_master
+            WHERE type = 'trigger'
+              AND name NOT LIKE 'sqlite_%'
+            """
+                ).use { cursor ->
+                    val nameIndex = cursor.getColumnIndexOrThrow("name")
+                    val sqlIndex = cursor.getColumnIndexOrThrow("sql")
+
+                    while (cursor.moveToNext()) {
+                        existing[cursor.getString(nameIndex)] =
+                            cursor.getString(sqlIndex)
+                    }
+                }
+
+                // لا نحذف أي حماية غير معروفة.
+                val unknown = existing.keys - expected.keys
+                check(unknown.isEmpty()) {
+                    "Unexpected persistent V8 triggers: ${unknown.sorted()}"
+                }
+
+                // إنشاء أو إصلاح التعريفات المرجعية.
                 expected.forEach { (name, expectedSql) ->
                     val actualSql = existing[name]
-                    if (actualSql == null || normalizeSql(actualSql) != normalizeSql(expectedSql)) {
-                        db.execSQL("DROP TRIGGER IF EXISTS `$name`")
+
+                    if (
+                        actualSql == null ||
+                        normalizeSql(actualSql) != normalizeSql(expectedSql)
+                    ) {
+                        db.execSQL("DROP TRIGGER IF EXISTS $name")
                         db.execSQL(expectedSql)
                     }
                 }
+
+                // التحقق النهائي من المجموعة داخل المعاملة وقبل COMMIT.
+                val verified = mutableMapOf<String, String>()
+                db.query(
+                    """
+            SELECT name, sql
+            FROM sqlite_master
+            WHERE type = 'trigger'
+              AND name NOT LIKE 'sqlite_%'
+            """
+                ).use { cursor ->
+                    val nameIndex = cursor.getColumnIndexOrThrow("name")
+                    val sqlIndex = cursor.getColumnIndexOrThrow("sql")
+
+                    while (cursor.moveToNext()) {
+                        verified[cursor.getString(nameIndex)] =
+                            cursor.getString(sqlIndex)
+                    }
+                }
+
+                check(verified.keys == expected.keys) {
+                    "V8 trigger set verification failed"
+                }
+
+                expected.forEach { (name, expectedSql) ->
+                    check(
+                        normalizeSql(verified.getValue(name)) ==
+                                normalizeSql(expectedSql)
+                    ) {
+                        "V8 trigger definition verification failed: $name"
+                    }
+                }
+
+                // لا يتم اعتماد المعاملة إلا بعد نجاح جميع الفحوص.
                 db.setTransactionSuccessful()
             } finally {
                 db.endTransaction()
-            }
-
-            val verified = mutableMapOf<String, String>()
-            db.query("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND name NOT LIKE 'sqlite_%'").use { cursor ->
-                val nameIndex = cursor.getColumnIndexOrThrow("name")
-                val sqlIndex = cursor.getColumnIndexOrThrow("sql")
-                while (cursor.moveToNext()) verified[cursor.getString(nameIndex)] = cursor.getString(sqlIndex)
-            }
-            check(verified.keys == expected.keys) { "V8 trigger set verification failed" }
-            expected.forEach { (name, expectedSql) ->
-                check(normalizeSql(verified.getValue(name)) == normalizeSql(expectedSql)) {
-                    "V8 trigger definition verification failed: $name"
-                }
             }
         }
 
