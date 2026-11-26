@@ -315,6 +315,84 @@ class SaleServiceTest {
     }
 
     @Test
+    fun cancellationRejectsClockEarlierThanConfirmationWithoutMutation() = runBlocking {
+        val itemId = addItem()
+        val batchId = addOpeningBatch(itemId, qty = 5L, cost = 500L)
+        val saleId = addInvoiceAndLine(
+            number = 34, itemId = itemId, qty = 2L,
+            unitPrice = 50L, lineDiscount = 0L, lineTotal = 100L
+        )
+        assertEquals(SaleConfirmationResult.Confirmed(saleId, 1), service.confirmPendingSale(saleId))
+
+        val result = SaleCancellationService(
+            database, FixedAppClock(now - 1L, TimeZone.getTimeZone("UTC"))
+        ).cancelConfirmedSale(saleId, "clock rollback")
+
+        assertEquals(SaleCancellationResult.InvalidCancellationTime, result)
+        assertEquals(SaleStatus.CONFIRMED, database.salesDao().getInvoice(saleId)?.status)
+        assertEquals(3L, database.batchDao().getById(batchId)?.qtyRemaining)
+        assertEquals(0, database.stockMovementDao().forSaleId(saleId).count { it.type == MovementType.SALE_CANCEL })
+    }
+
+    @Test
+    fun databaseRejectsNonMatchingSaleCancelMovement() = runBlocking {
+        val itemId = addItem()
+        addOpeningBatch(itemId, qty = 5L, cost = 500L)
+        val saleId = addInvoiceAndLine(
+            number = 35, itemId = itemId, qty = 2L,
+            unitPrice = 50L, lineDiscount = 0L, lineTotal = 100L
+        )
+        assertEquals(SaleConfirmationResult.Confirmed(saleId, 1), service.confirmPendingSale(saleId))
+        val original = database.stockMovementDao().forSaleId(saleId).single { it.type == MovementType.SALE }
+        var rejected = false
+        try {
+            database.openHelper.writableDatabase.execSQL(
+                """INSERT INTO stock_movements
+                   (movementDate, type, batchId, itemId, qtyDelta, costDelta, invoiceRef,
+                    saleId, allocId, reversesMovementId, reason, note)
+                   VALUES (?, 'SALE_CANCEL', ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL)""",
+                arrayOf<Any?>(
+                    now + 1L, original.batchId, original.itemId,
+                    -original.qtyDelta + 1L, -original.costDelta,
+                    original.invoiceRef, saleId, original.movementId
+                )
+            )
+        } catch (_: SQLiteConstraintException) {
+            rejected = true
+        }
+        assertTrue("SQLite must reject an inexact inverse movement", rejected)
+        assertEquals(0, database.stockMovementDao().forSaleId(saleId).count { it.type == MovementType.SALE_CANCEL })
+        assertEquals(SaleStatus.CONFIRMED, database.salesDao().getInvoice(saleId)?.status)
+    }
+
+    @Test
+    fun cancellationAcceptsZeroCostInverseMovement() = runBlocking {
+        val itemId = addItem()
+        val batchId = addOpeningBatch(itemId, qty = 5L, cost = 0L)
+        val saleId = addInvoiceAndLine(
+            number = 36, itemId = itemId, qty = 2L,
+            unitPrice = 50L, lineDiscount = 0L, lineTotal = 100L
+        )
+        assertEquals(SaleConfirmationResult.Confirmed(saleId, 1), service.confirmPendingSale(saleId))
+        assertEquals(SaleCancellationResult.Cancelled(saleId, 1), SaleCancellationService(database).cancelConfirmedSale(saleId))
+        val reversal = database.stockMovementDao().forSaleId(saleId).single { it.type == MovementType.SALE_CANCEL }
+        assertEquals(0L, reversal.costDelta)
+        assertEquals(5L, database.batchDao().getById(batchId)?.qtyRemaining)
+        assertEquals(0L, database.batchDao().getById(batchId)?.costRemaining)
+    }
+
+    @Test
+    fun batchRestoreCannotExceedReceivedQuantityOrOriginalReceiptCost() = runBlocking {
+        val itemId = addItem()
+        val batchId = addOpeningBatch(itemId, qty = 5L, cost = 500L)
+        assertEquals(1, database.batchDao().deductIfAvailable(batchId, 1L, 0L))
+        assertEquals(0, database.batchDao().restore(batchId, 2L, 0L))
+        assertEquals(0, database.batchDao().restore(batchId, 1L, 501L))
+        assertEquals(4L, database.batchDao().getById(batchId)?.qtyRemaining)
+        assertEquals(500L, database.batchDao().getById(batchId)?.costRemaining)
+    }
+
+    @Test
     fun cancellationOfPendingInvoiceIsRejectedWithoutMutation() = runBlocking {
         val itemId = addItem()
         val batchId = addOpeningBatch(itemId, qty = 5L, cost = 500L)

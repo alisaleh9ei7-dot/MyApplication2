@@ -44,6 +44,17 @@ interface BatchDao {
                costRemaining = costRemaining + :costBack
            WHERE batchId = :batchId
              AND :qty > 0 AND :costBack >= 0
+             -- لا نسمح باستعادة كمية تتجاوز الكمية التي دخلت الدفعة أصلاً.
+             AND qtyRemaining <= qtyReceived - :qty
+             -- سقف التكلفة هو مجموع تكاليف حركات الاستلام الأصلية (OPENING/PURCHASE).
+             AND costRemaining <= (
+                 SELECT COALESCE(SUM(m.costDelta), 0)
+                 FROM stock_movements m
+                 WHERE m.batchId = batches.batchId
+                   AND m.type IN ('OPENING', 'PURCHASE')
+                   AND m.costDelta > 0
+             ) - :costBack
+             -- حماية إضافية من تجاوز Long حتى لو كانت بيانات الاستلام غير سليمة.
              AND qtyRemaining <= 9223372036854775807 - :qty
              AND costRemaining <= 9223372036854775807 - :costBack"""
     )

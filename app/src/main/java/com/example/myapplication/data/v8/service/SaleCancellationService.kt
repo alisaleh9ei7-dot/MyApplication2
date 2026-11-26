@@ -45,7 +45,10 @@ class SaleCancellationService(
             }
 
             val now = clock.nowMillis()
-            if (now < 0L) return@withTransaction SaleCancellationResult.InvalidCancellationTime
+            val confirmedAt = invoice.confirmedAt
+            if (now < 0L || confirmedAt == null || now < confirmedAt) {
+                return@withTransaction SaleCancellationResult.InvalidCancellationTime
+            }
 
             val saleMovements = movementDao.forSaleId(saleId)
                 .filter { it.type == MovementType.SALE }
