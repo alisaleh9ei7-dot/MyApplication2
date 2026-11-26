@@ -468,7 +468,7 @@ abstract class PharmacyDatabaseV8 : RoomDatabase() {
                     }
                 }
 
-                // التحقق النهائي من المجموعة داخل المعاملة وقبل COMMIT.
+                // التحقق النهائي داخل المعاملة وقبل COMMIT.
                 val verified = mutableMapOf<String, String>()
                 db.query(
                     """
@@ -500,7 +500,7 @@ abstract class PharmacyDatabaseV8 : RoomDatabase() {
                     }
                 }
 
-                // لا يتم اعتماد المعاملة إلا بعد نجاح جميع الفحوص.
+                // لا تعتمد المعاملة إلا بعد نجاح جميع الفحوص.
                 db.setTransactionSuccessful()
             } finally {
                 db.endTransaction()
@@ -597,7 +597,19 @@ abstract class PharmacyDatabaseV8 : RoomDatabase() {
                          OR NOT EXISTS(SELECT 1 FROM batches b
                                        WHERE b.batchId = m.batchId
                                          AND b.source = 'OPENING' AND b.itemId = m.itemId)
-                      ))"""
+                      ))""",
+                """SELECT COUNT(*) FROM batches b
+   LEFT JOIN (
+       SELECT batchId,
+              SUM(qtyDelta) AS ledgerQty,
+              SUM(costDelta) AS ledgerCost
+       FROM stock_movements
+       WHERE batchId IS NOT NULL
+       GROUP BY batchId
+   ) ledger ON ledger.batchId = b.batchId
+   WHERE b.qtyRemaining <> COALESCE(ledger.ledgerQty, 0)
+      OR b.costRemaining <> COALESCE(ledger.ledgerCost, 0)"""
+
             )
             invalidCounts.forEachIndexed { index, sql ->
                 db.query(sql).use { cursor ->
