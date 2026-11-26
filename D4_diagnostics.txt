@@ -1,0 +1,1751 @@
+﻿========== DATABASE TRIGGERS ==========
+package com.example.myapplication.data.v8.db
+
+import android.content.Context
+import androidx.room.Database
+import androidx.room.Room
+import androidx.room.RoomDatabase
+import androidx.sqlite.db.SupportSQLiteDatabase
+import com.example.myapplication.data.v8.dao.BatchDao
+import com.example.myapplication.data.v8.dao.FinanceDao
+import com.example.myapplication.data.v8.dao.ItemDao
+import com.example.myapplication.data.v8.dao.PurchaseDao
+import com.example.myapplication.data.v8.dao.SalesDao
+import com.example.myapplication.data.v8.dao.StockMovementDao
+import com.example.myapplication.data.v8.dao.SupplierDao
+import com.example.myapplication.data.v8.dao.SettingDao
+import com.example.myapplication.data.v8.entity.BatchEntity
+import com.example.myapplication.data.v8.entity.CashEntryEntity
+import com.example.myapplication.data.v8.entity.ExpenseEntity
+import com.example.myapplication.data.v8.entity.InvoiceCounterEntity
+import com.example.myapplication.data.v8.entity.ItemChangeEntity
+import com.example.myapplication.data.v8.entity.ItemEntity
+import com.example.myapplication.data.v8.entity.PurchaseInvoiceEntity
+import com.example.myapplication.data.v8.entity.PurchaseLineEntity
+import com.example.myapplication.data.v8.entity.SaleAllocationEntity
+import com.example.myapplication.data.v8.entity.SalesInvoiceEntity
+import com.example.myapplication.data.v8.entity.SalesLineEntity
+import com.example.myapplication.data.v8.entity.StockMovementEntity
+import com.example.myapplication.data.v8.entity.SupplierEntity
+import com.example.myapplication.data.v8.entity.SupplierEntryEntity
+import com.example.myapplication.data.v8.entity.SettingEntity
+
+/**
+ * Ù‚Ø§Ø¹Ø¯Ø© V8 Ù…Ø³ØªÙ‚Ù„Ø©. Ù„Ø§ ØªØ³ØªØ¨Ø¯Ù„ AppDatabase Ø§Ù„Ù‚Ø¯ÙŠÙ…Ø© ÙˆÙ„Ø§ ØªÙØ±Ø¨Ø· Ø¨Ø§Ù„ØªØ·Ø¨ÙŠÙ‚ Ø§Ù„Ø¥Ù†ØªØ§Ø¬ÙŠ ÙÙŠ Ù‡Ø°Ù‡ Ø§Ù„Ù…Ø±Ø­Ù„Ø©.
+ * Ù„Ø§ ØªÙÙØªØ­ Ø§Ù„Ù‚Ø§Ø¹Ø¯Ø© Ù‚Ø¨Ù„ ØªØ«Ø¨ÙŠØª Triggers ÙˆØ§Ù„ØªØ­Ù‚Ù‚ Ù…Ù† ØªØ¹Ø±ÙŠÙØ§ØªÙ‡Ø§ ÙˆØ³Ù„Ø§Ù…Ø© Ø¨ÙŠØ§Ù†Ø§ØªÙ‡Ø§.
+ */
+@Database(
+    entities = [
+        ItemEntity::class, ItemChangeEntity::class,
+        SupplierEntity::class, SupplierEntryEntity::class,
+        PurchaseInvoiceEntity::class, PurchaseLineEntity::class,
+        BatchEntity::class, StockMovementEntity::class,
+        SalesInvoiceEntity::class, SalesLineEntity::class, SaleAllocationEntity::class,
+        InvoiceCounterEntity::class,
+        ExpenseEntity::class, CashEntryEntity::class,
+        SettingEntity::class
+    ],
+    version = 8,
+    exportSchema = true
+)
+abstract class PharmacyDatabaseV8 : RoomDatabase() {
+    abstract fun itemDao(): ItemDao
+    abstract fun supplierDao(): SupplierDao
+    abstract fun purchaseDao(): PurchaseDao
+    abstract fun batchDao(): BatchDao
+    abstract fun stockMovementDao(): StockMovementDao
+    abstract fun salesDao(): SalesDao
+    abstract fun financeDao(): FinanceDao
+    abstract fun settingDao(): SettingDao
+
+    companion object {
+        const val DATABASE_NAME = "pharmacy_v8.db"
+
+        @Volatile
+        private var INSTANCE: PharmacyDatabaseV8? = null
+
+        /** Builder Ù…Ø³ØªÙ‚Ù„Ø› Ù„Ø§ ÙŠÙˆØ¬Ø¯ fallback destructive ÙˆÙ„Ø§ Ø£ÙŠ Ø±Ø¨Ø· Ø¨Ù‚Ø§Ø¹Ø¯Ø© V7. */
+        fun getDatabase(context: Context): PharmacyDatabaseV8 =
+            INSTANCE ?: synchronized(this) {
+                INSTANCE ?: Room.databaseBuilder(
+                    context.applicationContext,
+                    PharmacyDatabaseV8::class.java,
+                    DATABASE_NAME
+                ).addCallback(TRIGGERS_CALLBACK).build().also { INSTANCE = it }
+            }
+
+        /** Ø§Ù„ØªØ¹Ø±ÙŠÙØ§Øª Ø§Ù„Ù…Ø±Ø¬Ø¹ÙŠØ© Ø§Ù„ÙˆØ­ÙŠØ¯Ø© Ù„Ù„Ù€ persistent triggers ÙÙŠ V8. */
+        val TRIGGERS: List<String> = listOf(
+            // Ø³Ø¬Ù„ Ø§Ù„Ø­Ø±ÙƒØ§Øª Ù„Ù„Ø¥Ø¶Ø§ÙØ© ÙÙ‚Ø·.
+            """CREATE TRIGGER trg_movements_no_update BEFORE UPDATE ON stock_movements
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_MOVEMENT_IMMUTABLE'); END""",
+            """CREATE TRIGGER trg_movements_no_delete BEFORE DELETE ON stock_movements
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_MOVEMENT_IMMUTABLE'); END""",
+
+            // Ù„Ø§ Ø±ØµÙŠØ¯ Ø£Ùˆ ØªÙƒÙ„ÙØ© Ø³Ø§Ù„Ø¨Ø© ÙÙŠ Ø§Ù„Ø¯ÙØ¹Ø§Øª.
+            """CREATE TRIGGER trg_batches_no_negative_ins BEFORE INSERT ON batches
+               WHEN NEW.qtyRemaining < 0 OR NEW.costRemaining < 0
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_NEGATIVE_BATCH_BALANCE'); END""",
+            """CREATE TRIGGER trg_batches_no_negative_upd BEFORE UPDATE ON batches
+               WHEN NEW.qtyRemaining < 0 OR NEW.costRemaining < 0
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_NEGATIVE_BATCH_BALANCE'); END""",
+            """CREATE TRIGGER trg_batches_no_delete BEFORE DELETE ON batches
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_RECORD_DELETE_NOT_ALLOWED'); END""",
+
+            // Ù„Ø§ Ø­Ø°Ù ØªØ§Ø±ÙŠØ®ÙŠ Ù„Ù„ÙÙˆØ§ØªÙŠØ± ÙˆØ¨Ù†ÙˆØ¯ Ø§Ù„Ø¨ÙŠØ¹ ÙˆØ§Ù„ØªØ®ØµÙŠØµ.
+            """CREATE TRIGGER trg_sales_invoices_no_delete BEFORE DELETE ON sales_invoices
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_RECORD_DELETE_NOT_ALLOWED'); END""",
+            """CREATE TRIGGER trg_sales_lines_no_delete BEFORE DELETE ON sales_lines
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_RECORD_DELETE_NOT_ALLOWED'); END""",
+            """CREATE TRIGGER trg_sale_alloc_no_delete BEFORE DELETE ON sale_allocations
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_RECORD_DELETE_NOT_ALLOWED'); END""",
+
+            // ÙÙˆØ§ØªÙŠØ± Ø§Ù„Ø´Ø±Ø§Ø¡: ØªÙØ­Ø°Ù Ø§Ù„Ù…Ø³ÙˆØ¯Ø© ÙÙ‚Ø·.
+            """CREATE TRIGGER trg_purchase_inv_delete_draft_only BEFORE DELETE ON purchase_invoices
+               WHEN OLD.status <> 'DRAFT'
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_PURCHASE_DELETE_NOT_ALLOWED'); END""",
+            """CREATE TRIGGER trg_purchase_lines_delete_draft_only BEFORE DELETE ON purchase_lines
+               WHEN (SELECT status FROM purchase_invoices WHERE purchaseId = OLD.purchaseId) <> 'DRAFT'
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_PURCHASE_LINE_DELETE_NOT_ALLOWED'); END""",
+
+            // U4: Ø§Ù„ØµÙ†Ù Ø¥Ù…Ø§ ØºÙŠØ± Ù‚Ø§Ø¨Ù„ Ù„Ù„ØªÙ‚Ø³ÙŠÙ… (NULL) Ø£Ùˆ Ù…Ø¹Ø§Ù…Ù„ ÙØ¹Ù„ÙŠ >= 2.
+            """CREATE TRIGGER trg_items_strips_per_box_insert
+               BEFORE INSERT ON items
+               WHEN NEW.stripsPerBox IS NOT NULL AND NEW.stripsPerBox < 2
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_INVALID_STRIPS_PER_BOX'); END""",
+            """CREATE TRIGGER trg_items_strips_per_box_update
+               BEFORE UPDATE OF stripsPerBox ON items
+               WHEN NEW.stripsPerBox IS NOT NULL AND NEW.stripsPerBox < 2
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_INVALID_STRIPS_PER_BOX'); END""",
+
+            // D2: Ø§Ù„ØªØºÙŠÙŠØ± Ù…Ø³Ù…ÙˆØ­ Ù…Ø¹ Ø§Ù„ØªØ§Ø±ÙŠØ® Ø¥Ø°Ø§ ÙƒØ§Ù† Ø±ØµÙŠØ¯ ÙƒÙ„ Ø¯ÙØ¹Ø§Øª Ø§Ù„ØµÙ†Ù ØµÙØ±Ø§Ù‹.
+            // ItemDao ÙŠÙƒØ±Ø± Ø§Ù„Ø´Ø±Ø· ÙÙŠ UPDATEØŒ ÙˆÙ‡Ø°Ø§ Trigger Ù‡Ùˆ Ø®Ø· Ø§Ù„Ø¯ÙØ§Ø¹ Ø§Ù„Ø£Ø®ÙŠØ±.
+            """CREATE TRIGGER trg_items_strips_per_box_lock
+               BEFORE UPDATE OF stripsPerBox ON items
+               WHEN OLD.stripsPerBox IS NOT NEW.stripsPerBox
+                AND EXISTS(
+                    SELECT 1 FROM batches
+                    WHERE itemId = OLD.itemId AND qtyRemaining <> 0
+                )
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_ITEM_FACTOR_LOCKED_BY_STOCK'); END""",
+
+            // D2-B: ØªØ«Ø¨ÙŠØª Ù…Ø¹Ø§Ù…Ù„ Ø§Ù„ØªØ­ÙˆÙŠÙ„ Ø¹Ù†Ø¯ Ø¥Ù†Ø´Ø§Ø¡ Ø¨Ù†ÙˆØ¯ Ø§Ù„Ø´Ø±Ø§Ø¡ ÙˆØ§Ù„Ø¨ÙŠØ¹.
+            """CREATE TRIGGER trg_purchase_lines_base_factor_insert
+               BEFORE INSERT ON purchase_lines
+               WHEN NEW.baseUnitsPerBox < 1 OR NEW.baseUnitsPerBox IS NOT
+                    COALESCE((SELECT stripsPerBox FROM items WHERE itemId = NEW.itemId), 1)
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_PURCHASE_LINE_FACTOR_MISMATCH'); END""",
+            """CREATE TRIGGER trg_sales_lines_base_factor_insert
+               BEFORE INSERT ON sales_lines
+               WHEN NEW.qty <= 0
+                 OR NEW.stripsPerBoxFrozen < 1
+                 OR NEW.stripsPerBoxFrozen IS NOT
+                    COALESCE((SELECT stripsPerBox FROM items WHERE itemId = NEW.itemId), 1)
+                 OR (NEW.unitType = 'STRIP' AND NEW.stripsPerBoxFrozen < 2)
+                 OR NEW.baseQty <= 0
+                 OR (NEW.unitType = 'BOX' AND (
+                       NEW.qty > 9223372036854775807 / NEW.stripsPerBoxFrozen
+                       OR NEW.baseQty <> NEW.qty * NEW.stripsPerBoxFrozen
+                    ))
+                 OR (NEW.unitType = 'STRIP' AND NEW.baseQty <> NEW.qty)
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_SALE_LINE_BASE_QTY_MISMATCH'); END""",
+            """CREATE TRIGGER trg_purchase_lines_factor_immutable
+               BEFORE UPDATE OF baseUnitsPerBox, itemId ON purchase_lines
+               WHEN NEW.baseUnitsPerBox IS NOT OLD.baseUnitsPerBox OR NEW.itemId IS NOT OLD.itemId
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_PURCHASE_LINE_IMMUTABLE'); END""",
+            """CREATE TRIGGER trg_sales_lines_factor_immutable
+               BEFORE UPDATE OF stripsPerBoxFrozen, baseQty, unitType, qty, itemId ON sales_lines
+               WHEN NEW.stripsPerBoxFrozen IS NOT OLD.stripsPerBoxFrozen
+                 OR NEW.baseQty IS NOT OLD.baseQty
+                 OR NEW.unitType IS NOT OLD.unitType
+                 OR NEW.qty IS NOT OLD.qty
+                 OR NEW.itemId IS NOT OLD.itemId
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_SALE_LINE_SNAPSHOT_IMMUTABLE'); END""",
+
+            // D9: ÙÙŠ Ø§Ù„Ø¥ØµØ¯Ø§Ø± Ø§Ù„Ø£ÙˆÙ„ Ù…ØµØ§Ø¯Ø± Ø§Ù„Ø¯ÙØ¹Ø§Øª Ø§Ù„Ù…Ø¯Ø¹ÙˆÙ…Ø© Ù‡ÙŠ PURCHASE ÙˆOPENING ÙÙ‚Ø·.
+            """CREATE TRIGGER trg_batches_source_v1
+               BEFORE INSERT ON batches
+               WHEN NEW.source NOT IN ('PURCHASE', 'OPENING')
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_BATCH_SOURCE_NOT_SUPPORTED'); END""",
+
+            // D9: Ø­Ø±ÙƒØ© OPENING Ù…ÙˆØ¬Ø¨Ø©ØŒ Ù„Ø¯ÙØ¹Ø© OPENING ÙÙ‚Ø·ØŒ Ù…Ø±Ø© ÙˆØ§Ø­Ø¯Ø©ØŒ ÙˆØ¨Ù„Ø§ Ø±ÙˆØ§Ø¨Ø· Ø¨ÙŠØ¹.
+            """CREATE TRIGGER trg_opening_movement_validate
+               BEFORE INSERT ON stock_movements
+               WHEN NEW.type = 'OPENING' AND (
+                    NEW.qtyDelta <= 0
+                    OR NEW.batchId IS NULL
+                    OR NOT EXISTS(
+                        SELECT 1 FROM batches b
+                        WHERE b.batchId = NEW.batchId AND b.source = 'OPENING'
+                          AND b.itemId = NEW.itemId
+                    )
+                    OR NEW.invoiceRef IS NOT NULL
+                    OR NEW.saleId IS NOT NULL
+                    OR NEW.allocId IS NOT NULL
+                    OR NEW.reversesMovementId IS NOT NULL
+                    OR EXISTS(
+                        SELECT 1 FROM stock_movements m
+                        WHERE m.batchId = NEW.batchId AND m.type = 'OPENING'
+                    )
+               )
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_OPENING_MOVEMENT_INVALID'); END""",
+
+            // Ù„Ø§ Ù†Ø³Ù…Ø­ Ø¨Ø£Ù†ÙˆØ§Ø¹ Ø­Ø±ÙƒØ© ØºÙŠØ± Ù…Ø¹Ø±Ù‘ÙØ© ÙÙŠ V1Ø› Ù†Ø®ØªØ¨Ø± Ø®ØµÙˆØµØ§Ù‹ SUPPLIER_RETURN_DIFFERENCE.
+            """CREATE TRIGGER trg_movement_type_v1
+               BEFORE INSERT ON stock_movements
+               WHEN NEW.type NOT IN ('OPENING', 'PURCHASE', 'SALE', 'SALE_CANCEL')
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_MOVEMENT_TYPE_NOT_SUPPORTED'); END""",
+
+            // Ø§Ù„Ø¯ÙØ¹Ø© ØªØ­ÙØ¸ Ù…Ø¹Ø§Ù…Ù„Ù‡Ø§. PURCHASE ÙŠØ£Ø®Ø°Ù‡ Ù…Ù† Ø¨Ù†Ø¯ Ø§Ù„Ø´Ø±Ø§Ø¡ØŒ ÙˆØ§Ù„Ù…Ø±ØªØ¬Ø¹ Ù…Ù† Ø¯ÙØ¹Ø© Ø§Ù„Ø£ØµÙ„.
+            """CREATE TRIGGER trg_batches_base_factor_insert
+               BEFORE INSERT ON batches
+               WHEN NEW.baseUnitsPerBox < 1 OR
+                 (NEW.source = 'PURCHASE' AND (
+                    NEW.purchaseLineId IS NULL OR NOT EXISTS(
+                      SELECT 1 FROM purchase_lines p
+                      WHERE p.lineId = NEW.purchaseLineId
+                        AND p.itemId = NEW.itemId
+                        AND p.baseUnitsPerBox = NEW.baseUnitsPerBox
+                    )
+                 )) OR
+                 (NEW.source = 'CUSTOMER_RETURN' AND (
+                    NEW.parentBatchId IS NULL OR NOT EXISTS(
+                      SELECT 1 FROM batches parent
+                      WHERE parent.batchId = NEW.parentBatchId
+                        AND parent.itemId = NEW.itemId
+                        AND parent.baseUnitsPerBox = NEW.baseUnitsPerBox
+                    )
+                 )) OR
+                 (NEW.source = 'OPENING' AND (
+                    NEW.baseUnitsPerBox IS NOT
+                      COALESCE((SELECT stripsPerBox FROM items WHERE itemId = NEW.itemId), 1)
+                    OR NEW.purchaseLineId IS NOT NULL
+                    OR NEW.parentBatchId IS NOT NULL
+                 ))
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_BATCH_FACTOR_MISMATCH'); END""",
+            """CREATE TRIGGER trg_batches_factor_immutable
+               BEFORE UPDATE OF baseUnitsPerBox, itemId ON batches
+               WHEN NEW.baseUnitsPerBox IS NOT OLD.baseUnitsPerBox OR NEW.itemId IS NOT OLD.itemId
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_BATCH_FACTOR_IMMUTABLE'); END""",
+
+            // D2/U7: Ø³Ø¬Ù„ ØªØºÙŠÙŠØ±Ø§Øª stripsPerBox ÙŠÙÙ†Ø´Ø£ Ø¢Ù„ÙŠØ§Ù‹ØŒ ÙˆÙŠØ¸Ù„ append-only.
+            """CREATE TRIGGER trg_item_changes_validate_insert
+               BEFORE INSERT ON item_changes
+               WHEN NEW.fieldName <> 'stripsPerBox'
+                 OR NEW.oldValue IS NEW.newValue
+                 OR NOT EXISTS(
+                    SELECT 1 FROM items i WHERE i.itemId = NEW.itemId
+                      AND NEW.newValue IS CASE WHEN i.stripsPerBox IS NULL
+                                               THEN NULL ELSE CAST(i.stripsPerBox AS TEXT) END
+                 )
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_INVALID_ITEM_CHANGE'); END""",
+            """CREATE TRIGGER trg_item_changes_no_update BEFORE UPDATE ON item_changes
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_ITEM_CHANGE_IMMUTABLE'); END""",
+            """CREATE TRIGGER trg_item_changes_no_delete BEFORE DELETE ON item_changes
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_ITEM_CHANGE_IMMUTABLE'); END""",
+            """CREATE TRIGGER trg_items_no_delete_after_change BEFORE DELETE ON items
+               WHEN EXISTS(SELECT 1 FROM item_changes WHERE itemId = OLD.itemId)
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_ITEM_DELETE_NOT_ALLOWED'); END"""
+        )
+
+        private val triggerNameRegex = Regex("(?i)^\\s*CREATE\\s+TRIGGER\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?([A-Za-z0-9_]+)")
+
+        private fun triggerName(sql: String): String =
+            triggerNameRegex.find(sql)?.groupValues?.get(1)
+                ?: error("Invalid trigger definition: missing trigger name")
+
+        private fun normalizeSql(sql: String): String = sql
+            .replace(Regex("(?i)\\bIF\\s+NOT\\s+EXISTS\\b"), "")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .removeSuffix(";")
+
+        /**
+         * ÙŠØ¹ÙŠØ¯ Ø¨Ù†Ø§Ø¡ Ø£ÙŠ Trigger Ù†Ø§Ù‚Øµ Ø£Ùˆ Ù…Ø®ØªÙ„ÙØŒ Ø«Ù… ÙŠØªØ­Ù‚Ù‚ Ù…Ù† Ø§Ù„Ù…Ø¬Ù…ÙˆØ¹Ø© ÙƒØ§Ù…Ù„Ø©.
+         * Ù„Ø§ ÙŠØ­Ø°Ù Triggers Ù…Ø¬Ù‡ÙˆÙ„Ø©Ø› ÙˆØ¬ÙˆØ¯Ù‡Ø§ ÙŠÙˆÙ‚Ù ÙØªØ­ Ø§Ù„Ù‚Ø§Ø¹Ø¯Ø© Ø­ØªÙ‰ Ù„Ø§ Ù†Ù…Ø³Ø­ Ø­Ù…Ø§ÙŠØ© ØºÙŠØ± Ù…ÙÙ‡ÙˆÙ…Ø©.
+         */
+        private fun ensureTriggers(db: SupportSQLiteDatabase) {
+            val expected = TRIGGERS.associateBy(::triggerName)
+            check(expected.size == TRIGGERS.size) { "Duplicate V8 trigger name" }
+
+            val existing = mutableMapOf<String, String>()
+            db.query("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND name NOT LIKE 'sqlite_%'").use { cursor ->
+                val nameIndex = cursor.getColumnIndexOrThrow("name")
+                val sqlIndex = cursor.getColumnIndexOrThrow("sql")
+                while (cursor.moveToNext()) {
+                    existing[cursor.getString(nameIndex)] = cursor.getString(sqlIndex)
+                }
+            }
+
+            val unknown = existing.keys - expected.keys
+            check(unknown.isEmpty()) { "Unexpected persistent V8 triggers: ${unknown.sorted()}" }
+
+            db.beginTransaction()
+            try {
+                expected.forEach { (name, expectedSql) ->
+                    val actualSql = existing[name]
+                    if (actualSql == null || normalizeSql(actualSql) != normalizeSql(expectedSql)) {
+                        db.execSQL("DROP TRIGGER IF EXISTS `$name`")
+                        db.execSQL(expectedSql)
+                    }
+                }
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
+
+            val verified = mutableMapOf<String, String>()
+            db.query("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND name NOT LIKE 'sqlite_%'").use { cursor ->
+                val nameIndex = cursor.getColumnIndexOrThrow("name")
+                val sqlIndex = cursor.getColumnIndexOrThrow("sql")
+                while (cursor.moveToNext()) verified[cursor.getString(nameIndex)] = cursor.getString(sqlIndex)
+            }
+            check(verified.keys == expected.keys) { "V8 trigger set verification failed" }
+            expected.forEach { (name, expectedSql) ->
+                check(normalizeSql(verified.getValue(name)) == normalizeSql(expectedSql)) {
+                    "V8 trigger definition verification failed: $name"
+                }
+            }
+        }
+
+        /** ÙØ­Øµ Ø³Ù„Ø§Ù…Ø© Ø§Ù„Ø¨ÙŠØ§Ù†Ø§Øª Ø§Ù„Ø°ÙŠ ÙŠÙ„ÙŠ ØªØ«Ø¨ÙŠØª Triggers Ø¹Ù†Ø¯ ÙƒÙ„ ÙØªØ­. */
+        private fun verifyData(db: SupportSQLiteDatabase) {
+            db.query("PRAGMA integrity_check").use { cursor ->
+                check(cursor.moveToFirst() && cursor.getString(0).equals("ok", ignoreCase = true)) {
+                    "SQLite integrity_check failed"
+                }
+            }
+            db.query("PRAGMA foreign_key_check").use { cursor ->
+                check(!cursor.moveToFirst()) { "SQLite foreign_key_check found violations" }
+            }
+
+            val invalidCounts = listOf(
+                "SELECT COUNT(*) FROM items WHERE stripsPerBox IS NOT NULL AND stripsPerBox < 2",
+                """SELECT COUNT(*) FROM purchase_lines
+                   WHERE baseUnitsPerBox < 1""",
+                """SELECT COUNT(*) FROM sales_lines s
+                   WHERE s.stripsPerBoxFrozen < 1 OR s.qty <= 0 OR s.baseQty <= 0
+                      OR (s.unitType = 'STRIP' AND
+                          (s.stripsPerBoxFrozen < 2 OR s.baseQty <> s.qty))
+                      OR (s.unitType = 'BOX' AND (
+                          s.qty > 9223372036854775807 / s.stripsPerBoxFrozen
+                          OR s.baseQty <> s.qty * s.stripsPerBoxFrozen
+                      ))""",
+                """SELECT COUNT(*) FROM batches b JOIN items i ON i.itemId = b.itemId
+                   LEFT JOIN purchase_lines p ON p.lineId = b.purchaseLineId
+                   LEFT JOIN batches parent ON parent.batchId = b.parentBatchId
+                   WHERE b.baseUnitsPerBox < 1 OR
+                     (b.source = 'PURCHASE' AND (p.lineId IS NULL OR p.itemId <> b.itemId OR p.baseUnitsPerBox <> b.baseUnitsPerBox)) OR
+                     (b.source = 'OPENING' AND (
+                         b.purchaseLineId IS NOT NULL OR b.parentBatchId IS NOT NULL
+                     )) OR
+                     b.source NOT IN ('PURCHASE', 'OPENING')""",
+                """SELECT COUNT(*) FROM item_changes c
+                   LEFT JOIN items i ON i.itemId = c.itemId
+                   WHERE i.itemId IS NULL OR c.fieldName <> 'stripsPerBox' OR c.oldValue IS c.newValue""",
+                """SELECT COUNT(*) FROM batches b
+                   WHERE b.source = 'OPENING' AND (
+                     SELECT COUNT(*) FROM stock_movements m
+                     WHERE m.batchId = b.batchId AND m.type = 'OPENING'
+                   ) <> 1""",
+                """SELECT COUNT(*) FROM stock_movements m
+                   WHERE m.type NOT IN ('OPENING', 'PURCHASE', 'SALE', 'SALE_CANCEL')
+                      OR (m.type = 'OPENING' AND (
+                         m.qtyDelta <= 0 OR m.batchId IS NULL
+                         OR m.invoiceRef IS NOT NULL OR m.saleId IS NOT NULL
+                         OR m.allocId IS NOT NULL OR m.reversesMovementId IS NOT NULL
+                         OR NOT EXISTS(SELECT 1 FROM batches b
+                                       WHERE b.batchId = m.batchId
+                                         AND b.source = 'OPENING' AND b.itemId = m.itemId)
+                      ))"""
+            )
+            invalidCounts.forEachIndexed { index, sql ->
+                db.query(sql).use { cursor ->
+                    check(cursor.moveToFirst() && cursor.getLong(0) == 0L) {
+                        "V8 data integrity verification failed (check ${index + 1})"
+                    }
+                }
+            }
+
+            db.query(
+                """SELECT COUNT(*) FROM items i
+                   WHERE EXISTS(SELECT 1 FROM item_changes c WHERE c.itemId = i.itemId)
+                     AND (SELECT c2.newValue FROM item_changes c2 WHERE c2.itemId = i.itemId
+                          ORDER BY c2.changedAt DESC, c2.changeId DESC LIMIT 1)
+                         IS NOT CASE WHEN i.stripsPerBox IS NULL THEN NULL ELSE CAST(i.stripsPerBox AS TEXT) END"""
+            ).use { cursor ->
+                check(cursor.moveToFirst() && cursor.getLong(0) == 0L) {
+                    "V8 item_changes latest-value verification failed"
+                }
+            }
+        }
+
+        private fun ensureAndVerify(db: SupportSQLiteDatabase) {
+            // Ù„Ø§ Ù†ØµÙ„Ø­ Ø§Ù„Ø­Ù…Ø§ÙŠØ© Ù‚Ø¨Ù„ Ø§Ù„ØªØ£ÙƒØ¯ Ø£Ù† Ø§Ù„Ø¨ÙŠØ§Ù†Ø§Øª Ù†ÙØ³Ù‡Ø§ ØµØ§Ù„Ø­Ø©.
+            verifyData(db)
+            ensureTriggers(db)
+            verifyData(db)
+        }
+
+        /** onCreate Ù„Ù„ØªØ£Ø³ÙŠØ³ ÙˆonOpen Ù„Ø¥ØµÙ„Ø§Ø­/Ø§Ù„ØªØ­Ù‚Ù‚ Ù‚Ø¨Ù„ Ø§Ø³ØªØ®Ø¯Ø§Ù… DAO ÙÙŠ ÙƒÙ„ ÙØªØ­. */
+        val TRIGGERS_CALLBACK = object : RoomDatabase.Callback() {
+
+            override fun onCreate(db: SupportSQLiteDatabase) {
+                ensureAndVerify(db)
+            }
+
+            override fun onOpen(db: SupportSQLiteDatabase) {
+                ensureAndVerify(db)
+            }
+        }
+    }
+}
+n========== GENERATED SALES DAO ==========
+package com.example.myapplication.`data`.v8.dao
+
+import androidx.room.EntityInsertAdapter
+import androidx.room.RoomDatabase
+import androidx.room.util.getColumnIndexOrThrow
+import androidx.room.util.getTotalChangedRows
+import androidx.room.util.performSuspending
+import androidx.sqlite.SQLiteStatement
+import com.example.myapplication.`data`.v8.entity.InvoiceCounterEntity
+import com.example.myapplication.`data`.v8.entity.SaleAllocationEntity
+import com.example.myapplication.`data`.v8.entity.SaleStatus
+import com.example.myapplication.`data`.v8.entity.SalesInvoiceEntity
+import com.example.myapplication.`data`.v8.entity.SalesLineEntity
+import com.example.myapplication.`data`.v8.entity.UnitType
+import javax.`annotation`.processing.Generated
+import kotlin.IllegalArgumentException
+import kotlin.Int
+import kotlin.Long
+import kotlin.String
+import kotlin.Suppress
+import kotlin.collections.List
+import kotlin.collections.MutableList
+import kotlin.collections.mutableListOf
+import kotlin.reflect.KClass
+
+@Generated(value = ["androidx.room.RoomProcessor"])
+@Suppress(names = ["UNCHECKED_CAST", "DEPRECATION", "REDUNDANT_PROJECTION", "REMOVAL"])
+public class SalesDao_Impl(
+  __db: RoomDatabase,
+) : SalesDao {
+  private val __db: RoomDatabase
+
+  private val __insertAdapterOfSalesInvoiceEntity: EntityInsertAdapter<SalesInvoiceEntity>
+
+  private val __insertAdapterOfSalesLineEntity: EntityInsertAdapter<SalesLineEntity>
+
+  private val __insertAdapterOfSaleAllocationEntity: EntityInsertAdapter<SaleAllocationEntity>
+
+  private val __insertAdapterOfInvoiceCounterEntity: EntityInsertAdapter<InvoiceCounterEntity>
+  init {
+    this.__db = __db
+    this.__insertAdapterOfSalesInvoiceEntity = object : EntityInsertAdapter<SalesInvoiceEntity>() {
+      protected override fun createQuery(): String = "INSERT OR ABORT INTO `sales_invoices` (`saleId`,`displayNo`,`status`,`confirmedAt`,`cancelledAt`,`cancelReason`,`customerName`,`prescriptionImageName`,`grossTotal`,`discountTotal`,`netTotal`,`cartUuid`) VALUES (nullif(?, 0),?,?,?,?,?,?,?,?,?,?,?)"
+
+      protected override fun bind(statement: SQLiteStatement, entity: SalesInvoiceEntity) {
+        statement.bindLong(1, entity.saleId)
+        statement.bindText(2, entity.displayNo)
+        statement.bindText(3, __SaleStatus_enumToString(entity.status))
+        val _tmpConfirmedAt: Long? = entity.confirmedAt
+        if (_tmpConfirmedAt == null) {
+          statement.bindNull(4)
+        } else {
+          statement.bindLong(4, _tmpConfirmedAt)
+        }
+        val _tmpCancelledAt: Long? = entity.cancelledAt
+        if (_tmpCancelledAt == null) {
+          statement.bindNull(5)
+        } else {
+          statement.bindLong(5, _tmpCancelledAt)
+        }
+        val _tmpCancelReason: String? = entity.cancelReason
+        if (_tmpCancelReason == null) {
+          statement.bindNull(6)
+        } else {
+          statement.bindText(6, _tmpCancelReason)
+        }
+        val _tmpCustomerName: String? = entity.customerName
+        if (_tmpCustomerName == null) {
+          statement.bindNull(7)
+        } else {
+          statement.bindText(7, _tmpCustomerName)
+        }
+        val _tmpPrescriptionImageName: String? = entity.prescriptionImageName
+        if (_tmpPrescriptionImageName == null) {
+          statement.bindNull(8)
+        } else {
+          statement.bindText(8, _tmpPrescriptionImageName)
+        }
+        statement.bindLong(9, entity.grossTotal)
+        statement.bindLong(10, entity.discountTotal)
+        statement.bindLong(11, entity.netTotal)
+        statement.bindText(12, entity.cartUuid)
+      }
+    }
+    this.__insertAdapterOfSalesLineEntity = object : EntityInsertAdapter<SalesLineEntity>() {
+      protected override fun createQuery(): String = "INSERT OR ABORT INTO `sales_lines` (`lineId`,`saleId`,`itemId`,`unitType`,`qty`,`stripsPerBoxFrozen`,`baseQty`,`unitPrice`,`lineDiscount`,`lineTotal`) VALUES (nullif(?, 0),?,?,?,?,?,?,?,?,?)"
+
+      protected override fun bind(statement: SQLiteStatement, entity: SalesLineEntity) {
+        statement.bindLong(1, entity.lineId)
+        statement.bindLong(2, entity.saleId)
+        statement.bindLong(3, entity.itemId)
+        statement.bindText(4, __UnitType_enumToString(entity.unitType))
+        statement.bindLong(5, entity.qty)
+        statement.bindLong(6, entity.stripsPerBoxFrozen.toLong())
+        statement.bindLong(7, entity.baseQty)
+        statement.bindLong(8, entity.unitPrice)
+        statement.bindLong(9, entity.lineDiscount)
+        statement.bindLong(10, entity.lineTotal)
+      }
+    }
+    this.__insertAdapterOfSaleAllocationEntity = object : EntityInsertAdapter<SaleAllocationEntity>() {
+      protected override fun createQuery(): String = "INSERT OR ABORT INTO `sale_allocations` (`allocId`,`lineId`,`batchId`,`qtyBase`,`revenueFrozen`,`costFrozen`) VALUES (nullif(?, 0),?,?,?,?,?)"
+
+      protected override fun bind(statement: SQLiteStatement, entity: SaleAllocationEntity) {
+        statement.bindLong(1, entity.allocId)
+        statement.bindLong(2, entity.lineId)
+        statement.bindLong(3, entity.batchId)
+        statement.bindLong(4, entity.qtyBase)
+        statement.bindLong(5, entity.revenueFrozen)
+        statement.bindLong(6, entity.costFrozen)
+      }
+    }
+    this.__insertAdapterOfInvoiceCounterEntity = object : EntityInsertAdapter<InvoiceCounterEntity>() {
+      protected override fun createQuery(): String = "INSERT OR IGNORE INTO `invoice_counters` (`yearMonth`,`lastNumber`) VALUES (?,?)"
+
+      protected override fun bind(statement: SQLiteStatement, entity: InvoiceCounterEntity) {
+        statement.bindLong(1, entity.yearMonth.toLong())
+        statement.bindLong(2, entity.lastNumber)
+      }
+    }
+  }
+
+  public override suspend fun insertInvoice(invoice: SalesInvoiceEntity): Long = performSuspending(__db, false, true) { _connection ->
+    val _result: Long = __insertAdapterOfSalesInvoiceEntity.insertAndReturnId(_connection, invoice)
+    _result
+  }
+
+  public override suspend fun insertLine(line: SalesLineEntity): Long = performSuspending(__db, false, true) { _connection ->
+    val _result: Long = __insertAdapterOfSalesLineEntity.insertAndReturnId(_connection, line)
+    _result
+  }
+
+  public override suspend fun insertAllocation(allocation: SaleAllocationEntity): Long = performSuspending(__db, false, true) { _connection ->
+    val _result: Long = __insertAdapterOfSaleAllocationEntity.insertAndReturnId(_connection, allocation)
+    _result
+  }
+
+  public override suspend fun ensureCounter(counter: InvoiceCounterEntity): Long = performSuspending(__db, false, true) { _connection ->
+    val _result: Long = __insertAdapterOfInvoiceCounterEntity.insertAndReturnId(_connection, counter)
+    _result
+  }
+
+  public override suspend fun getInvoice(id: Long): SalesInvoiceEntity? {
+    val _sql: String = "SELECT * FROM sales_invoices WHERE saleId = ?"
+    return performSuspending(__db, true, false) { _connection ->
+      val _stmt: SQLiteStatement = _connection.prepare(_sql)
+      try {
+        var _argIndex: Int = 1
+        _stmt.bindLong(_argIndex, id)
+        val _columnIndexOfSaleId: Int = getColumnIndexOrThrow(_stmt, "saleId")
+        val _columnIndexOfDisplayNo: Int = getColumnIndexOrThrow(_stmt, "displayNo")
+        val _columnIndexOfStatus: Int = getColumnIndexOrThrow(_stmt, "status")
+        val _columnIndexOfConfirmedAt: Int = getColumnIndexOrThrow(_stmt, "confirmedAt")
+        val _columnIndexOfCancelledAt: Int = getColumnIndexOrThrow(_stmt, "cancelledAt")
+        val _columnIndexOfCancelReason: Int = getColumnIndexOrThrow(_stmt, "cancelReason")
+        val _columnIndexOfCustomerName: Int = getColumnIndexOrThrow(_stmt, "customerName")
+        val _columnIndexOfPrescriptionImageName: Int = getColumnIndexOrThrow(_stmt, "prescriptionImageName")
+        val _columnIndexOfGrossTotal: Int = getColumnIndexOrThrow(_stmt, "grossTotal")
+        val _columnIndexOfDiscountTotal: Int = getColumnIndexOrThrow(_stmt, "discountTotal")
+        val _columnIndexOfNetTotal: Int = getColumnIndexOrThrow(_stmt, "netTotal")
+        val _columnIndexOfCartUuid: Int = getColumnIndexOrThrow(_stmt, "cartUuid")
+        val _result: SalesInvoiceEntity?
+        if (_stmt.step()) {
+          val _tmpSaleId: Long
+          _tmpSaleId = _stmt.getLong(_columnIndexOfSaleId)
+          val _tmpDisplayNo: String
+          _tmpDisplayNo = _stmt.getText(_columnIndexOfDisplayNo)
+          val _tmpStatus: SaleStatus
+          _tmpStatus = __SaleStatus_stringToEnum(_stmt.getText(_columnIndexOfStatus))
+          val _tmpConfirmedAt: Long?
+          if (_stmt.isNull(_columnIndexOfConfirmedAt)) {
+            _tmpConfirmedAt = null
+          } else {
+            _tmpConfirmedAt = _stmt.getLong(_columnIndexOfConfirmedAt)
+          }
+          val _tmpCancelledAt: Long?
+          if (_stmt.isNull(_columnIndexOfCancelledAt)) {
+            _tmpCancelledAt = null
+          } else {
+            _tmpCancelledAt = _stmt.getLong(_columnIndexOfCancelledAt)
+          }
+          val _tmpCancelReason: String?
+          if (_stmt.isNull(_columnIndexOfCancelReason)) {
+            _tmpCancelReason = null
+          } else {
+            _tmpCancelReason = _stmt.getText(_columnIndexOfCancelReason)
+          }
+          val _tmpCustomerName: String?
+          if (_stmt.isNull(_columnIndexOfCustomerName)) {
+            _tmpCustomerName = null
+          } else {
+            _tmpCustomerName = _stmt.getText(_columnIndexOfCustomerName)
+          }
+          val _tmpPrescriptionImageName: String?
+          if (_stmt.isNull(_columnIndexOfPrescriptionImageName)) {
+            _tmpPrescriptionImageName = null
+          } else {
+            _tmpPrescriptionImageName = _stmt.getText(_columnIndexOfPrescriptionImageName)
+          }
+          val _tmpGrossTotal: Long
+          _tmpGrossTotal = _stmt.getLong(_columnIndexOfGrossTotal)
+          val _tmpDiscountTotal: Long
+          _tmpDiscountTotal = _stmt.getLong(_columnIndexOfDiscountTotal)
+          val _tmpNetTotal: Long
+          _tmpNetTotal = _stmt.getLong(_columnIndexOfNetTotal)
+          val _tmpCartUuid: String
+          _tmpCartUuid = _stmt.getText(_columnIndexOfCartUuid)
+          _result = SalesInvoiceEntity(_tmpSaleId,_tmpDisplayNo,_tmpStatus,_tmpConfirmedAt,_tmpCancelledAt,_tmpCancelReason,_tmpCustomerName,_tmpPrescriptionImageName,_tmpGrossTotal,_tmpDiscountTotal,_tmpNetTotal,_tmpCartUuid)
+        } else {
+          _result = null
+        }
+        _result
+      } finally {
+        _stmt.close()
+      }
+    }
+  }
+
+  public override suspend fun findByCartUuid(uuid: String): SalesInvoiceEntity? {
+    val _sql: String = "SELECT * FROM sales_invoices WHERE cartUuid = ? LIMIT 1"
+    return performSuspending(__db, true, false) { _connection ->
+      val _stmt: SQLiteStatement = _connection.prepare(_sql)
+      try {
+        var _argIndex: Int = 1
+        _stmt.bindText(_argIndex, uuid)
+        val _columnIndexOfSaleId: Int = getColumnIndexOrThrow(_stmt, "saleId")
+        val _columnIndexOfDisplayNo: Int = getColumnIndexOrThrow(_stmt, "displayNo")
+        val _columnIndexOfStatus: Int = getColumnIndexOrThrow(_stmt, "status")
+        val _columnIndexOfConfirmedAt: Int = getColumnIndexOrThrow(_stmt, "confirmedAt")
+        val _columnIndexOfCancelledAt: Int = getColumnIndexOrThrow(_stmt, "cancelledAt")
+        val _columnIndexOfCancelReason: Int = getColumnIndexOrThrow(_stmt, "cancelReason")
+        val _columnIndexOfCustomerName: Int = getColumnIndexOrThrow(_stmt, "customerName")
+        val _columnIndexOfPrescriptionImageName: Int = getColumnIndexOrThrow(_stmt, "prescriptionImageName")
+        val _columnIndexOfGrossTotal: Int = getColumnIndexOrThrow(_stmt, "grossTotal")
+        val _columnIndexOfDiscountTotal: Int = getColumnIndexOrThrow(_stmt, "discountTotal")
+        val _columnIndexOfNetTotal: Int = getColumnIndexOrThrow(_stmt, "netTotal")
+        val _columnIndexOfCartUuid: Int = getColumnIndexOrThrow(_stmt, "cartUuid")
+        val _result: SalesInvoiceEntity?
+        if (_stmt.step()) {
+          val _tmpSaleId: Long
+          _tmpSaleId = _stmt.getLong(_columnIndexOfSaleId)
+          val _tmpDisplayNo: String
+          _tmpDisplayNo = _stmt.getText(_columnIndexOfDisplayNo)
+          val _tmpStatus: SaleStatus
+          _tmpStatus = __SaleStatus_stringToEnum(_stmt.getText(_columnIndexOfStatus))
+          val _tmpConfirmedAt: Long?
+          if (_stmt.isNull(_columnIndexOfConfirmedAt)) {
+            _tmpConfirmedAt = null
+          } else {
+            _tmpConfirmedAt = _stmt.getLong(_columnIndexOfConfirmedAt)
+          }
+          val _tmpCancelledAt: Long?
+          if (_stmt.isNull(_columnIndexOfCancelledAt)) {
+            _tmpCancelledAt = null
+          } else {
+            _tmpCancelledAt = _stmt.getLong(_columnIndexOfCancelledAt)
+          }
+          val _tmpCancelReason: String?
+          if (_stmt.isNull(_columnIndexOfCancelReason)) {
+            _tmpCancelReason = null
+          } else {
+            _tmpCancelReason = _stmt.getText(_columnIndexOfCancelReason)
+          }
+          val _tmpCustomerName: String?
+          if (_stmt.isNull(_columnIndexOfCustomerName)) {
+            _tmpCustomerName = null
+          } else {
+            _tmpCustomerName = _stmt.getText(_columnIndexOfCustomerName)
+          }
+          val _tmpPrescriptionImageName: String?
+          if (_stmt.isNull(_columnIndexOfPrescriptionImageName)) {
+            _tmpPrescriptionImageName = null
+          } else {
+            _tmpPrescriptionImageName = _stmt.getText(_columnIndexOfPrescriptionImageName)
+          }
+          val _tmpGrossTotal: Long
+          _tmpGrossTotal = _stmt.getLong(_columnIndexOfGrossTotal)
+          val _tmpDiscountTotal: Long
+          _tmpDiscountTotal = _stmt.getLong(_columnIndexOfDiscountTotal)
+          val _tmpNetTotal: Long
+          _tmpNetTotal = _stmt.getLong(_columnIndexOfNetTotal)
+          val _tmpCartUuid: String
+          _tmpCartUuid = _stmt.getText(_columnIndexOfCartUuid)
+          _result = SalesInvoiceEntity(_tmpSaleId,_tmpDisplayNo,_tmpStatus,_tmpConfirmedAt,_tmpCancelledAt,_tmpCancelReason,_tmpCustomerName,_tmpPrescriptionImageName,_tmpGrossTotal,_tmpDiscountTotal,_tmpNetTotal,_tmpCartUuid)
+        } else {
+          _result = null
+        }
+        _result
+      } finally {
+        _stmt.close()
+      }
+    }
+  }
+
+  public override suspend fun findByDisplayNo(displayNo: String): SalesInvoiceEntity? {
+    val _sql: String = "SELECT * FROM sales_invoices WHERE displayNo = ? LIMIT 1"
+    return performSuspending(__db, true, false) { _connection ->
+      val _stmt: SQLiteStatement = _connection.prepare(_sql)
+      try {
+        var _argIndex: Int = 1
+        _stmt.bindText(_argIndex, displayNo)
+        val _columnIndexOfSaleId: Int = getColumnIndexOrThrow(_stmt, "saleId")
+        val _columnIndexOfDisplayNo: Int = getColumnIndexOrThrow(_stmt, "displayNo")
+        val _columnIndexOfStatus: Int = getColumnIndexOrThrow(_stmt, "status")
+        val _columnIndexOfConfirmedAt: Int = getColumnIndexOrThrow(_stmt, "confirmedAt")
+        val _columnIndexOfCancelledAt: Int = getColumnIndexOrThrow(_stmt, "cancelledAt")
+        val _columnIndexOfCancelReason: Int = getColumnIndexOrThrow(_stmt, "cancelReason")
+        val _columnIndexOfCustomerName: Int = getColumnIndexOrThrow(_stmt, "customerName")
+        val _columnIndexOfPrescriptionImageName: Int = getColumnIndexOrThrow(_stmt, "prescriptionImageName")
+        val _columnIndexOfGrossTotal: Int = getColumnIndexOrThrow(_stmt, "grossTotal")
+        val _columnIndexOfDiscountTotal: Int = getColumnIndexOrThrow(_stmt, "discountTotal")
+        val _columnIndexOfNetTotal: Int = getColumnIndexOrThrow(_stmt, "netTotal")
+        val _columnIndexOfCartUuid: Int = getColumnIndexOrThrow(_stmt, "cartUuid")
+        val _result: SalesInvoiceEntity?
+        if (_stmt.step()) {
+          val _tmpSaleId: Long
+          _tmpSaleId = _stmt.getLong(_columnIndexOfSaleId)
+          val _tmpDisplayNo: String
+          _tmpDisplayNo = _stmt.getText(_columnIndexOfDisplayNo)
+          val _tmpStatus: SaleStatus
+          _tmpStatus = __SaleStatus_stringToEnum(_stmt.getText(_columnIndexOfStatus))
+          val _tmpConfirmedAt: Long?
+          if (_stmt.isNull(_columnIndexOfConfirmedAt)) {
+            _tmpConfirmedAt = null
+          } else {
+            _tmpConfirmedAt = _stmt.getLong(_columnIndexOfConfirmedAt)
+          }
+          val _tmpCancelledAt: Long?
+          if (_stmt.isNull(_columnIndexOfCancelledAt)) {
+            _tmpCancelledAt = null
+          } else {
+            _tmpCancelledAt = _stmt.getLong(_columnIndexOfCancelledAt)
+          }
+          val _tmpCancelReason: String?
+          if (_stmt.isNull(_columnIndexOfCancelReason)) {
+            _tmpCancelReason = null
+          } else {
+            _tmpCancelReason = _stmt.getText(_columnIndexOfCancelReason)
+          }
+          val _tmpCustomerName: String?
+          if (_stmt.isNull(_columnIndexOfCustomerName)) {
+            _tmpCustomerName = null
+          } else {
+            _tmpCustomerName = _stmt.getText(_columnIndexOfCustomerName)
+          }
+          val _tmpPrescriptionImageName: String?
+          if (_stmt.isNull(_columnIndexOfPrescriptionImageName)) {
+            _tmpPrescriptionImageName = null
+          } else {
+            _tmpPrescriptionImageName = _stmt.getText(_columnIndexOfPrescriptionImageName)
+          }
+          val _tmpGrossTotal: Long
+          _tmpGrossTotal = _stmt.getLong(_columnIndexOfGrossTotal)
+          val _tmpDiscountTotal: Long
+          _tmpDiscountTotal = _stmt.getLong(_columnIndexOfDiscountTotal)
+          val _tmpNetTotal: Long
+          _tmpNetTotal = _stmt.getLong(_columnIndexOfNetTotal)
+          val _tmpCartUuid: String
+          _tmpCartUuid = _stmt.getText(_columnIndexOfCartUuid)
+          _result = SalesInvoiceEntity(_tmpSaleId,_tmpDisplayNo,_tmpStatus,_tmpConfirmedAt,_tmpCancelledAt,_tmpCancelReason,_tmpCustomerName,_tmpPrescriptionImageName,_tmpGrossTotal,_tmpDiscountTotal,_tmpNetTotal,_tmpCartUuid)
+        } else {
+          _result = null
+        }
+        _result
+      } finally {
+        _stmt.close()
+      }
+    }
+  }
+
+  public override suspend fun linesFor(saleId: Long): List<SalesLineEntity> {
+    val _sql: String = "SELECT * FROM sales_lines WHERE saleId = ? ORDER BY lineId"
+    return performSuspending(__db, true, false) { _connection ->
+      val _stmt: SQLiteStatement = _connection.prepare(_sql)
+      try {
+        var _argIndex: Int = 1
+        _stmt.bindLong(_argIndex, saleId)
+        val _columnIndexOfLineId: Int = getColumnIndexOrThrow(_stmt, "lineId")
+        val _columnIndexOfSaleId: Int = getColumnIndexOrThrow(_stmt, "saleId")
+        val _columnIndexOfItemId: Int = getColumnIndexOrThrow(_stmt, "itemId")
+        val _columnIndexOfUnitType: Int = getColumnIndexOrThrow(_stmt, "unitType")
+        val _columnIndexOfQty: Int = getColumnIndexOrThrow(_stmt, "qty")
+        val _columnIndexOfStripsPerBoxFrozen: Int = getColumnIndexOrThrow(_stmt, "stripsPerBoxFrozen")
+        val _columnIndexOfBaseQty: Int = getColumnIndexOrThrow(_stmt, "baseQty")
+        val _columnIndexOfUnitPrice: Int = getColumnIndexOrThrow(_stmt, "unitPrice")
+        val _columnIndexOfLineDiscount: Int = getColumnIndexOrThrow(_stmt, "lineDiscount")
+        val _columnIndexOfLineTotal: Int = getColumnIndexOrThrow(_stmt, "lineTotal")
+        val _result: MutableList<SalesLineEntity> = mutableListOf()
+        while (_stmt.step()) {
+          val _item: SalesLineEntity
+          val _tmpLineId: Long
+          _tmpLineId = _stmt.getLong(_columnIndexOfLineId)
+          val _tmpSaleId: Long
+          _tmpSaleId = _stmt.getLong(_columnIndexOfSaleId)
+          val _tmpItemId: Long
+          _tmpItemId = _stmt.getLong(_columnIndexOfItemId)
+          val _tmpUnitType: UnitType
+          _tmpUnitType = __UnitType_stringToEnum(_stmt.getText(_columnIndexOfUnitType))
+          val _tmpQty: Long
+          _tmpQty = _stmt.getLong(_columnIndexOfQty)
+          val _tmpStripsPerBoxFrozen: Int
+          _tmpStripsPerBoxFrozen = _stmt.getLong(_columnIndexOfStripsPerBoxFrozen).toInt()
+          val _tmpBaseQty: Long
+          _tmpBaseQty = _stmt.getLong(_columnIndexOfBaseQty)
+          val _tmpUnitPrice: Long
+          _tmpUnitPrice = _stmt.getLong(_columnIndexOfUnitPrice)
+          val _tmpLineDiscount: Long
+          _tmpLineDiscount = _stmt.getLong(_columnIndexOfLineDiscount)
+          val _tmpLineTotal: Long
+          _tmpLineTotal = _stmt.getLong(_columnIndexOfLineTotal)
+          _item = SalesLineEntity(_tmpLineId,_tmpSaleId,_tmpItemId,_tmpUnitType,_tmpQty,_tmpStripsPerBoxFrozen,_tmpBaseQty,_tmpUnitPrice,_tmpLineDiscount,_tmpLineTotal)
+          _result.add(_item)
+        }
+        _result
+      } finally {
+        _stmt.close()
+      }
+    }
+  }
+
+  public override suspend fun allocationsFor(saleId: Long): List<SaleAllocationEntity> {
+    val _sql: String = """
+        |SELECT a.* FROM sale_allocations a
+        |           JOIN sales_lines l ON a.lineId = l.lineId
+        |           WHERE l.saleId = ? ORDER BY a.allocId
+        """.trimMargin()
+    return performSuspending(__db, true, false) { _connection ->
+      val _stmt: SQLiteStatement = _connection.prepare(_sql)
+      try {
+        var _argIndex: Int = 1
+        _stmt.bindLong(_argIndex, saleId)
+        val _columnIndexOfAllocId: Int = getColumnIndexOrThrow(_stmt, "allocId")
+        val _columnIndexOfLineId: Int = getColumnIndexOrThrow(_stmt, "lineId")
+        val _columnIndexOfBatchId: Int = getColumnIndexOrThrow(_stmt, "batchId")
+        val _columnIndexOfQtyBase: Int = getColumnIndexOrThrow(_stmt, "qtyBase")
+        val _columnIndexOfRevenueFrozen: Int = getColumnIndexOrThrow(_stmt, "revenueFrozen")
+        val _columnIndexOfCostFrozen: Int = getColumnIndexOrThrow(_stmt, "costFrozen")
+        val _result: MutableList<SaleAllocationEntity> = mutableListOf()
+        while (_stmt.step()) {
+          val _item: SaleAllocationEntity
+          val _tmpAllocId: Long
+          _tmpAllocId = _stmt.getLong(_columnIndexOfAllocId)
+          val _tmpLineId: Long
+          _tmpLineId = _stmt.getLong(_columnIndexOfLineId)
+          val _tmpBatchId: Long
+          _tmpBatchId = _stmt.getLong(_columnIndexOfBatchId)
+          val _tmpQtyBase: Long
+          _tmpQtyBase = _stmt.getLong(_columnIndexOfQtyBase)
+          val _tmpRevenueFrozen: Long
+          _tmpRevenueFrozen = _stmt.getLong(_columnIndexOfRevenueFrozen)
+          val _tmpCostFrozen: Long
+          _tmpCostFrozen = _stmt.getLong(_columnIndexOfCostFrozen)
+          _item = SaleAllocationEntity(_tmpAllocId,_tmpLineId,_tmpBatchId,_tmpQtyBase,_tmpRevenueFrozen,_tmpCostFrozen)
+          _result.add(_item)
+        }
+        _result
+      } finally {
+        _stmt.close()
+      }
+    }
+  }
+
+  public override suspend fun recent(limit: Int): List<SalesInvoiceEntity> {
+    val _sql: String = "SELECT * FROM sales_invoices ORDER BY COALESCE(confirmedAt, 0) DESC, saleId DESC LIMIT ?"
+    return performSuspending(__db, true, false) { _connection ->
+      val _stmt: SQLiteStatement = _connection.prepare(_sql)
+      try {
+        var _argIndex: Int = 1
+        _stmt.bindLong(_argIndex, limit.toLong())
+        val _columnIndexOfSaleId: Int = getColumnIndexOrThrow(_stmt, "saleId")
+        val _columnIndexOfDisplayNo: Int = getColumnIndexOrThrow(_stmt, "displayNo")
+        val _columnIndexOfStatus: Int = getColumnIndexOrThrow(_stmt, "status")
+        val _columnIndexOfConfirmedAt: Int = getColumnIndexOrThrow(_stmt, "confirmedAt")
+        val _columnIndexOfCancelledAt: Int = getColumnIndexOrThrow(_stmt, "cancelledAt")
+        val _columnIndexOfCancelReason: Int = getColumnIndexOrThrow(_stmt, "cancelReason")
+        val _columnIndexOfCustomerName: Int = getColumnIndexOrThrow(_stmt, "customerName")
+        val _columnIndexOfPrescriptionImageName: Int = getColumnIndexOrThrow(_stmt, "prescriptionImageName")
+        val _columnIndexOfGrossTotal: Int = getColumnIndexOrThrow(_stmt, "grossTotal")
+        val _columnIndexOfDiscountTotal: Int = getColumnIndexOrThrow(_stmt, "discountTotal")
+        val _columnIndexOfNetTotal: Int = getColumnIndexOrThrow(_stmt, "netTotal")
+        val _columnIndexOfCartUuid: Int = getColumnIndexOrThrow(_stmt, "cartUuid")
+        val _result: MutableList<SalesInvoiceEntity> = mutableListOf()
+        while (_stmt.step()) {
+          val _item: SalesInvoiceEntity
+          val _tmpSaleId: Long
+          _tmpSaleId = _stmt.getLong(_columnIndexOfSaleId)
+          val _tmpDisplayNo: String
+          _tmpDisplayNo = _stmt.getText(_columnIndexOfDisplayNo)
+          val _tmpStatus: SaleStatus
+          _tmpStatus = __SaleStatus_stringToEnum(_stmt.getText(_columnIndexOfStatus))
+          val _tmpConfirmedAt: Long?
+          if (_stmt.isNull(_columnIndexOfConfirmedAt)) {
+            _tmpConfirmedAt = null
+          } else {
+            _tmpConfirmedAt = _stmt.getLong(_columnIndexOfConfirmedAt)
+          }
+          val _tmpCancelledAt: Long?
+          if (_stmt.isNull(_columnIndexOfCancelledAt)) {
+            _tmpCancelledAt = null
+          } else {
+            _tmpCancelledAt = _stmt.getLong(_columnIndexOfCancelledAt)
+          }
+          val _tmpCancelReason: String?
+          if (_stmt.isNull(_columnIndexOfCancelReason)) {
+            _tmpCancelReason = null
+          } else {
+            _tmpCancelReason = _stmt.getText(_columnIndexOfCancelReason)
+          }
+          val _tmpCustomerName: String?
+          if (_stmt.isNull(_columnIndexOfCustomerName)) {
+            _tmpCustomerName = null
+          } else {
+            _tmpCustomerName = _stmt.getText(_columnIndexOfCustomerName)
+          }
+          val _tmpPrescriptionImageName: String?
+          if (_stmt.isNull(_columnIndexOfPrescriptionImageName)) {
+            _tmpPrescriptionImageName = null
+          } else {
+            _tmpPrescriptionImageName = _stmt.getText(_columnIndexOfPrescriptionImageName)
+          }
+          val _tmpGrossTotal: Long
+          _tmpGrossTotal = _stmt.getLong(_columnIndexOfGrossTotal)
+          val _tmpDiscountTotal: Long
+          _tmpDiscountTotal = _stmt.getLong(_columnIndexOfDiscountTotal)
+          val _tmpNetTotal: Long
+          _tmpNetTotal = _stmt.getLong(_columnIndexOfNetTotal)
+          val _tmpCartUuid: String
+          _tmpCartUuid = _stmt.getText(_columnIndexOfCartUuid)
+          _item = SalesInvoiceEntity(_tmpSaleId,_tmpDisplayNo,_tmpStatus,_tmpConfirmedAt,_tmpCancelledAt,_tmpCancelReason,_tmpCustomerName,_tmpPrescriptionImageName,_tmpGrossTotal,_tmpDiscountTotal,_tmpNetTotal,_tmpCartUuid)
+          _result.add(_item)
+        }
+        _result
+      } finally {
+        _stmt.close()
+      }
+    }
+  }
+
+  public override suspend fun counterValue(yearMonth: Int): Long? {
+    val _sql: String = "SELECT lastNumber FROM invoice_counters WHERE yearMonth = ?"
+    return performSuspending(__db, true, false) { _connection ->
+      val _stmt: SQLiteStatement = _connection.prepare(_sql)
+      try {
+        var _argIndex: Int = 1
+        _stmt.bindLong(_argIndex, yearMonth.toLong())
+        val _result: Long?
+        if (_stmt.step()) {
+          if (_stmt.isNull(0)) {
+            _result = null
+          } else {
+            _result = _stmt.getLong(0)
+          }
+        } else {
+          _result = null
+        }
+        _result
+      } finally {
+        _stmt.close()
+      }
+    }
+  }
+
+  public override suspend fun netSales(start: Long, end: Long): Long {
+    val _sql: String = """
+        |SELECT COALESCE(SUM(netTotal), 0) FROM sales_invoices
+        |           WHERE status = 'CONFIRMED' AND confirmedAt >= ? AND confirmedAt < ?
+        """.trimMargin()
+    return performSuspending(__db, true, false) { _connection ->
+      val _stmt: SQLiteStatement = _connection.prepare(_sql)
+      try {
+        var _argIndex: Int = 1
+        _stmt.bindLong(_argIndex, start)
+        _argIndex = 2
+        _stmt.bindLong(_argIndex, end)
+        val _result: Long
+        if (_stmt.step()) {
+          val _tmp: Long
+          _tmp = _stmt.getLong(0)
+          _result = _tmp
+        } else {
+          _result = 0L
+        }
+        _result
+      } finally {
+        _stmt.close()
+      }
+    }
+  }
+
+  public override suspend fun frozenCost(start: Long, end: Long): Long {
+    val _sql: String = """
+        |SELECT COALESCE(SUM(a.costFrozen), 0) FROM sale_allocations a
+        |           JOIN sales_lines l ON a.lineId = l.lineId
+        |           JOIN sales_invoices s ON l.saleId = s.saleId
+        |           WHERE s.status = 'CONFIRMED' AND s.confirmedAt >= ? AND s.confirmedAt < ?
+        """.trimMargin()
+    return performSuspending(__db, true, false) { _connection ->
+      val _stmt: SQLiteStatement = _connection.prepare(_sql)
+      try {
+        var _argIndex: Int = 1
+        _stmt.bindLong(_argIndex, start)
+        _argIndex = 2
+        _stmt.bindLong(_argIndex, end)
+        val _result: Long
+        if (_stmt.step()) {
+          val _tmp: Long
+          _tmp = _stmt.getLong(0)
+          _result = _tmp
+        } else {
+          _result = 0L
+        }
+        _result
+      } finally {
+        _stmt.close()
+      }
+    }
+  }
+
+  public override suspend fun confirmPending(saleId: Long, confirmedAt: Long): Int {
+    val _sql: String = """
+        |UPDATE sales_invoices SET status = 'CONFIRMED', confirmedAt = ?
+        |           WHERE saleId = ? AND status = 'PENDING'
+        """.trimMargin()
+    return performSuspending(__db, false, true) { _connection ->
+      val _stmt: SQLiteStatement = _connection.prepare(_sql)
+      try {
+        var _argIndex: Int = 1
+        _stmt.bindLong(_argIndex, confirmedAt)
+        _argIndex = 2
+        _stmt.bindLong(_argIndex, saleId)
+        _stmt.step()
+        getTotalChangedRows(_connection)
+      } finally {
+        _stmt.close()
+      }
+    }
+  }
+
+  public override suspend fun markCancelled(
+    saleId: Long,
+    cancelledAt: Long,
+    cancelReason: String?,
+  ): Int {
+    val _sql: String = """
+        |UPDATE sales_invoices SET status = 'CANCELLED', cancelledAt = ?,
+        |           cancelReason = ?
+        |           WHERE saleId = ? AND status = 'CONFIRMED'
+        """.trimMargin()
+    return performSuspending(__db, false, true) { _connection ->
+      val _stmt: SQLiteStatement = _connection.prepare(_sql)
+      try {
+        var _argIndex: Int = 1
+        _stmt.bindLong(_argIndex, cancelledAt)
+        _argIndex = 2
+        if (cancelReason == null) {
+          _stmt.bindNull(_argIndex)
+        } else {
+          _stmt.bindText(_argIndex, cancelReason)
+        }
+        _argIndex = 3
+        _stmt.bindLong(_argIndex, saleId)
+        _stmt.step()
+        getTotalChangedRows(_connection)
+      } finally {
+        _stmt.close()
+      }
+    }
+  }
+
+  public override suspend fun bumpCounter(yearMonth: Int): Int {
+    val _sql: String = "UPDATE invoice_counters SET lastNumber = lastNumber + 1 WHERE yearMonth = ? AND lastNumber < 999999"
+    return performSuspending(__db, false, true) { _connection ->
+      val _stmt: SQLiteStatement = _connection.prepare(_sql)
+      try {
+        var _argIndex: Int = 1
+        _stmt.bindLong(_argIndex, yearMonth.toLong())
+        _stmt.step()
+        getTotalChangedRows(_connection)
+      } finally {
+        _stmt.close()
+      }
+    }
+  }
+
+  private fun __SaleStatus_enumToString(_value: SaleStatus): String = when (_value) {
+    SaleStatus.PENDING -> "PENDING"
+    SaleStatus.CONFIRMED -> "CONFIRMED"
+    SaleStatus.CANCELLED -> "CANCELLED"
+  }
+
+  private fun __UnitType_enumToString(_value: UnitType): String = when (_value) {
+    UnitType.BOX -> "BOX"
+    UnitType.STRIP -> "STRIP"
+  }
+
+  private fun __SaleStatus_stringToEnum(_value: String): SaleStatus = when (_value) {
+    "PENDING" -> SaleStatus.PENDING
+    "CONFIRMED" -> SaleStatus.CONFIRMED
+    "CANCELLED" -> SaleStatus.CANCELLED
+    else -> throw IllegalArgumentException("Can't convert value to enum, unknown value: " + _value)
+  }
+
+  private fun __UnitType_stringToEnum(_value: String): UnitType = when (_value) {
+    "BOX" -> UnitType.BOX
+    "STRIP" -> UnitType.STRIP
+    else -> throw IllegalArgumentException("Can't convert value to enum, unknown value: " + _value)
+  }
+
+  public companion object {
+    public fun getRequiredConverters(): List<KClass<*>> = emptyList()
+  }
+}
+n========== GENERATED DATABASE ==========
+package com.example.myapplication.`data`.v8.db
+
+import androidx.room.InvalidationTracker
+import androidx.room.RoomOpenDelegate
+import androidx.room.migration.AutoMigrationSpec
+import androidx.room.migration.Migration
+import androidx.room.util.TableInfo
+import androidx.room.util.TableInfo.Companion.read
+import androidx.room.util.dropFtsSyncTriggers
+import androidx.sqlite.SQLiteConnection
+import androidx.sqlite.execSQL
+import com.example.myapplication.`data`.v8.dao.BatchDao
+import com.example.myapplication.`data`.v8.dao.BatchDao_Impl
+import com.example.myapplication.`data`.v8.dao.FinanceDao
+import com.example.myapplication.`data`.v8.dao.FinanceDao_Impl
+import com.example.myapplication.`data`.v8.dao.ItemDao
+import com.example.myapplication.`data`.v8.dao.ItemDao_Impl
+import com.example.myapplication.`data`.v8.dao.PurchaseDao
+import com.example.myapplication.`data`.v8.dao.PurchaseDao_Impl
+import com.example.myapplication.`data`.v8.dao.SalesDao
+import com.example.myapplication.`data`.v8.dao.SalesDao_Impl
+import com.example.myapplication.`data`.v8.dao.SettingDao
+import com.example.myapplication.`data`.v8.dao.SettingDao_Impl
+import com.example.myapplication.`data`.v8.dao.StockMovementDao
+import com.example.myapplication.`data`.v8.dao.StockMovementDao_Impl
+import com.example.myapplication.`data`.v8.dao.SupplierDao
+import com.example.myapplication.`data`.v8.dao.SupplierDao_Impl
+import javax.`annotation`.processing.Generated
+import kotlin.Lazy
+import kotlin.String
+import kotlin.Suppress
+import kotlin.collections.List
+import kotlin.collections.Map
+import kotlin.collections.MutableList
+import kotlin.collections.MutableMap
+import kotlin.collections.MutableSet
+import kotlin.collections.Set
+import kotlin.collections.mutableListOf
+import kotlin.collections.mutableMapOf
+import kotlin.collections.mutableSetOf
+import kotlin.reflect.KClass
+
+@Generated(value = ["androidx.room.RoomProcessor"])
+@Suppress(names = ["UNCHECKED_CAST", "DEPRECATION", "REDUNDANT_PROJECTION", "REMOVAL"])
+public class PharmacyDatabaseV8_Impl : PharmacyDatabaseV8() {
+  private val _itemDao: Lazy<ItemDao> = lazy {
+    ItemDao_Impl(this)
+  }
+
+  private val _supplierDao: Lazy<SupplierDao> = lazy {
+    SupplierDao_Impl(this)
+  }
+
+  private val _purchaseDao: Lazy<PurchaseDao> = lazy {
+    PurchaseDao_Impl(this)
+  }
+
+  private val _batchDao: Lazy<BatchDao> = lazy {
+    BatchDao_Impl(this)
+  }
+
+  private val _stockMovementDao: Lazy<StockMovementDao> = lazy {
+    StockMovementDao_Impl(this)
+  }
+
+  private val _salesDao: Lazy<SalesDao> = lazy {
+    SalesDao_Impl(this)
+  }
+
+  private val _financeDao: Lazy<FinanceDao> = lazy {
+    FinanceDao_Impl(this)
+  }
+
+  private val _settingDao: Lazy<SettingDao> = lazy {
+    SettingDao_Impl(this)
+  }
+
+  protected override fun createOpenDelegate(): RoomOpenDelegate {
+    val _openDelegate: RoomOpenDelegate = object : RoomOpenDelegate(8, "6a38f22bcc620a010be8aeab0d36fd50", "9e90224b4db8c14a7999a2d73853c1c4") {
+      public override fun createAllTables(connection: SQLiteConnection) {
+        connection.execSQL("CREATE TABLE IF NOT EXISTS `items` (`itemId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `tradeName` TEXT NOT NULL, `activeIngredient` TEXT NOT NULL, `strength` TEXT NOT NULL, `dosageForm` TEXT NOT NULL, `company` TEXT NOT NULL, `category` TEXT NOT NULL, `location` TEXT, `barcode` TEXT, `requiresPrescription` INTEGER NOT NULL, `stripsPerBox` INTEGER, `boxSalePrice` INTEGER, `reorderLevel` INTEGER NOT NULL, `isActive` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL)")
+        connection.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_items_barcode` ON `items` (`barcode`)")
+        connection.execSQL("CREATE INDEX IF NOT EXISTS `index_items_tradeName` ON `items` (`tradeName`)")
+        connection.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_items_tradeName_activeIngredient_strength_dosageForm_company` ON `items` (`tradeName`, `activeIngredient`, `strength`, `dosageForm`, `company`)")
+        connection.execSQL("CREATE TABLE IF NOT EXISTS `item_changes` (`changeId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `itemId` INTEGER NOT NULL, `changedAt` INTEGER NOT NULL, `fieldName` TEXT NOT NULL, `oldValue` TEXT, `newValue` TEXT, `reason` TEXT, FOREIGN KEY(`itemId`) REFERENCES `items`(`itemId`) ON UPDATE NO ACTION ON DELETE RESTRICT )")
+        connection.execSQL("CREATE INDEX IF NOT EXISTS `index_item_changes_itemId` ON `item_changes` (`itemId`)")
+        connection.execSQL("CREATE TABLE IF NOT EXISTS `suppliers` (`supplierId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `phone` TEXT, `notes` TEXT, `isActive` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL)")
+        connection.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_suppliers_name` ON `suppliers` (`name`)")
+        connection.execSQL("CREATE TABLE IF NOT EXISTS `supplier_entries` (`entryId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `supplierId` INTEGER NOT NULL, `type` TEXT NOT NULL, `amount` INTEGER NOT NULL, `entryDate` INTEGER NOT NULL, `status` TEXT NOT NULL, `reference` TEXT, `note` TEXT, FOREIGN KEY(`supplierId`) REFERENCES `suppliers`(`supplierId`) ON UPDATE NO ACTION ON DELETE RESTRICT )")
+        connection.execSQL("CREATE INDEX IF NOT EXISTS `index_supplier_entries_supplierId` ON `supplier_entries` (`supplierId`)")
+        connection.execSQL("CREATE INDEX IF NOT EXISTS `index_supplier_entries_entryDate` ON `supplier_entries` (`entryDate`)")
+        connection.execSQL("CREATE TABLE IF NOT EXISTS `purchase_invoices` (`purchaseId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `supplierId` INTEGER NOT NULL, `supplierInvoiceNo` TEXT, `status` TEXT NOT NULL, `invoiceDate` INTEGER NOT NULL, `generalDiscount` INTEGER NOT NULL, `netTotal` INTEGER NOT NULL, `requestUuid` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `confirmedAt` INTEGER, FOREIGN KEY(`supplierId`) REFERENCES `suppliers`(`supplierId`) ON UPDATE NO ACTION ON DELETE RESTRICT )")
+        connection.execSQL("CREATE INDEX IF NOT EXISTS `index_purchase_invoices_supplierId` ON `purchase_invoices` (`supplierId`)")
+        connection.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_purchase_invoices_requestUuid` ON `purchase_invoices` (`requestUuid`)")
+        connection.execSQL("CREATE INDEX IF NOT EXISTS `index_purchase_invoices_invoiceDate` ON `purchase_invoices` (`invoiceDate`)")
+        connection.execSQL("CREATE TABLE IF NOT EXISTS `purchase_lines` (`lineId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `purchaseId` INTEGER NOT NULL, `itemId` INTEGER NOT NULL, `baseUnitsPerBox` INTEGER NOT NULL, `paidQty` INTEGER NOT NULL, `freeQty` INTEGER NOT NULL, `lineTotal` INTEGER NOT NULL, `lineDiscount` INTEGER NOT NULL, `expiryDate` INTEGER, `costIsEstimated` INTEGER NOT NULL, FOREIGN KEY(`purchaseId`) REFERENCES `purchase_invoices`(`purchaseId`) ON UPDATE NO ACTION ON DELETE RESTRICT , FOREIGN KEY(`itemId`) REFERENCES `items`(`itemId`) ON UPDATE NO ACTION ON DELETE RESTRICT )")
+        connection.execSQL("CREATE INDEX IF NOT EXISTS `index_purchase_lines_purchaseId` ON `purchase_lines` (`purchaseId`)")
+        connection.execSQL("CREATE INDEX IF NOT EXISTS `index_purchase_lines_itemId` ON `purchase_lines` (`itemId`)")
+        connection.execSQL("CREATE TABLE IF NOT EXISTS `batches` (`batchId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `itemId` INTEGER NOT NULL, `baseUnitsPerBox` INTEGER NOT NULL, `source` TEXT NOT NULL, `purchaseLineId` INTEGER, `parentBatchId` INTEGER, `qtyReceived` INTEGER NOT NULL, `qtyRemaining` INTEGER NOT NULL, `qtySupplierReturned` INTEGER NOT NULL, `costRemaining` INTEGER NOT NULL, `costIsEstimated` INTEGER NOT NULL, `salePrice` INTEGER, `expiryDate` INTEGER, `receivedAt` INTEGER NOT NULL, `isSellable` INTEGER NOT NULL, FOREIGN KEY(`itemId`) REFERENCES `items`(`itemId`) ON UPDATE NO ACTION ON DELETE RESTRICT , FOREIGN KEY(`purchaseLineId`) REFERENCES `purchase_lines`(`lineId`) ON UPDATE NO ACTION ON DELETE RESTRICT , FOREIGN KEY(`parentBatchId`) REFERENCES `batches`(`batchId`) ON UPDATE NO ACTION ON DELETE RESTRICT )")
+        connection.execSQL("CREATE INDEX IF NOT EXISTS `index_batches_itemId_isSellable_expiryDate` ON `batches` (`itemId`, `isSellable`, `expiryDate`)")
+        connection.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_batches_purchaseLineId` ON `batches` (`purchaseLineId`)")
+        connection.execSQL("CREATE INDEX IF NOT EXISTS `index_batches_parentBatchId` ON `batches` (`parentBatchId`)")
+        connection.execSQL("CREATE TABLE IF NOT EXISTS `stock_movements` (`movementId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `movementDate` INTEGER NOT NULL, `type` TEXT NOT NULL, `batchId` INTEGER, `itemId` INTEGER NOT NULL, `qtyDelta` INTEGER NOT NULL, `costDelta` INTEGER NOT NULL, `invoiceRef` TEXT, `saleId` INTEGER, `allocId` INTEGER, `reversesMovementId` INTEGER, `reason` TEXT, `note` TEXT, FOREIGN KEY(`itemId`) REFERENCES `items`(`itemId`) ON UPDATE NO ACTION ON DELETE RESTRICT , FOREIGN KEY(`batchId`) REFERENCES `batches`(`batchId`) ON UPDATE NO ACTION ON DELETE RESTRICT , FOREIGN KEY(`saleId`) REFERENCES `sales_invoices`(`saleId`) ON UPDATE NO ACTION ON DELETE RESTRICT , FOREIGN KEY(`allocId`) REFERENCES `sale_allocations`(`allocId`) ON UPDATE NO ACTION ON DELETE RESTRICT , FOREIGN KEY(`reversesMovementId`) REFERENCES `stock_movements`(`movementId`) ON UPDATE NO ACTION ON DELETE RESTRICT )")
+        connection.execSQL("CREATE INDEX IF NOT EXISTS `index_stock_movements_itemId` ON `stock_movements` (`itemId`)")
+        connection.execSQL("CREATE INDEX IF NOT EXISTS `index_stock_movements_batchId_qtyDelta_costDelta` ON `stock_movements` (`batchId`, `qtyDelta`, `costDelta`)")
+        connection.execSQL("CREATE INDEX IF NOT EXISTS `index_stock_movements_movementDate` ON `stock_movements` (`movementDate`)")
+        connection.execSQL("CREATE INDEX IF NOT EXISTS `index_stock_movements_type_movementDate` ON `stock_movements` (`type`, `movementDate`)")
+        connection.execSQL("CREATE INDEX IF NOT EXISTS `index_stock_movements_invoiceRef` ON `stock_movements` (`invoiceRef`)")
+        connection.execSQL("CREATE INDEX IF NOT EXISTS `index_stock_movements_saleId` ON `stock_movements` (`saleId`)")
+        connection.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_stock_movements_allocId` ON `stock_movements` (`allocId`)")
+        connection.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_stock_movements_reversesMovementId` ON `stock_movements` (`reversesMovementId`)")
+        connection.execSQL("CREATE TABLE IF NOT EXISTS `sales_invoices` (`saleId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `displayNo` TEXT NOT NULL, `status` TEXT NOT NULL, `confirmedAt` INTEGER, `cancelledAt` INTEGER, `cancelReason` TEXT, `customerName` TEXT, `prescriptionImageName` TEXT, `grossTotal` INTEGER NOT NULL, `discountTotal` INTEGER NOT NULL, `netTotal` INTEGER NOT NULL, `cartUuid` TEXT NOT NULL)")
+        connection.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_sales_invoices_displayNo` ON `sales_invoices` (`displayNo`)")
+        connection.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_sales_invoices_cartUuid` ON `sales_invoices` (`cartUuid`)")
+        connection.execSQL("CREATE INDEX IF NOT EXISTS `index_sales_invoices_confirmedAt` ON `sales_invoices` (`confirmedAt`)")
+        connection.execSQL("CREATE TABLE IF NOT EXISTS `sales_lines` (`lineId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `saleId` INTEGER NOT NULL, `itemId` INTEGER NOT NULL, `unitType` TEXT NOT NULL, `qty` INTEGER NOT NULL, `stripsPerBoxFrozen` INTEGER NOT NULL, `baseQty` INTEGER NOT NULL, `unitPrice` INTEGER NOT NULL, `lineDiscount` INTEGER NOT NULL, `lineTotal` INTEGER NOT NULL, FOREIGN KEY(`saleId`) REFERENCES `sales_invoices`(`saleId`) ON UPDATE NO ACTION ON DELETE RESTRICT , FOREIGN KEY(`itemId`) REFERENCES `items`(`itemId`) ON UPDATE NO ACTION ON DELETE RESTRICT )")
+        connection.execSQL("CREATE INDEX IF NOT EXISTS `index_sales_lines_saleId` ON `sales_lines` (`saleId`)")
+        connection.execSQL("CREATE INDEX IF NOT EXISTS `index_sales_lines_itemId` ON `sales_lines` (`itemId`)")
+        connection.execSQL("CREATE TABLE IF NOT EXISTS `sale_allocations` (`allocId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `lineId` INTEGER NOT NULL, `batchId` INTEGER NOT NULL, `qtyBase` INTEGER NOT NULL, `revenueFrozen` INTEGER NOT NULL, `costFrozen` INTEGER NOT NULL, FOREIGN KEY(`lineId`) REFERENCES `sales_lines`(`lineId`) ON UPDATE NO ACTION ON DELETE RESTRICT , FOREIGN KEY(`batchId`) REFERENCES `batches`(`batchId`) ON UPDATE NO ACTION ON DELETE RESTRICT )")
+        connection.execSQL("CREATE INDEX IF NOT EXISTS `index_sale_allocations_lineId` ON `sale_allocations` (`lineId`)")
+        connection.execSQL("CREATE INDEX IF NOT EXISTS `index_sale_allocations_batchId` ON `sale_allocations` (`batchId`)")
+        connection.execSQL("CREATE TABLE IF NOT EXISTS `invoice_counters` (`yearMonth` INTEGER NOT NULL, `lastNumber` INTEGER NOT NULL, PRIMARY KEY(`yearMonth`))")
+        connection.execSQL("CREATE TABLE IF NOT EXISTS `expenses` (`expenseId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `expenseDate` INTEGER NOT NULL, `category` TEXT NOT NULL, `description` TEXT, `amount` INTEGER NOT NULL, `status` TEXT NOT NULL)")
+        connection.execSQL("CREATE INDEX IF NOT EXISTS `index_expenses_expenseDate` ON `expenses` (`expenseDate`)")
+        connection.execSQL("CREATE TABLE IF NOT EXISTS `cash_entries` (`entryId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `entryDate` INTEGER NOT NULL, `type` TEXT NOT NULL, `amount` INTEGER NOT NULL, `note` TEXT, `status` TEXT NOT NULL)")
+        connection.execSQL("CREATE INDEX IF NOT EXISTS `index_cash_entries_entryDate` ON `cash_entries` (`entryDate`)")
+        connection.execSQL("CREATE TABLE IF NOT EXISTS `settings` (`key` TEXT NOT NULL, `value` TEXT, `description` TEXT, PRIMARY KEY(`key`))")
+        connection.execSQL("CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)")
+        connection.execSQL("INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '6a38f22bcc620a010be8aeab0d36fd50')")
+      }
+
+      public override fun dropAllTables(connection: SQLiteConnection) {
+        connection.execSQL("DROP TABLE IF EXISTS `items`")
+        connection.execSQL("DROP TABLE IF EXISTS `item_changes`")
+        connection.execSQL("DROP TABLE IF EXISTS `suppliers`")
+        connection.execSQL("DROP TABLE IF EXISTS `supplier_entries`")
+        connection.execSQL("DROP TABLE IF EXISTS `purchase_invoices`")
+        connection.execSQL("DROP TABLE IF EXISTS `purchase_lines`")
+        connection.execSQL("DROP TABLE IF EXISTS `batches`")
+        connection.execSQL("DROP TABLE IF EXISTS `stock_movements`")
+        connection.execSQL("DROP TABLE IF EXISTS `sales_invoices`")
+        connection.execSQL("DROP TABLE IF EXISTS `sales_lines`")
+        connection.execSQL("DROP TABLE IF EXISTS `sale_allocations`")
+        connection.execSQL("DROP TABLE IF EXISTS `invoice_counters`")
+        connection.execSQL("DROP TABLE IF EXISTS `expenses`")
+        connection.execSQL("DROP TABLE IF EXISTS `cash_entries`")
+        connection.execSQL("DROP TABLE IF EXISTS `settings`")
+      }
+
+      public override fun onCreate(connection: SQLiteConnection) {
+      }
+
+      public override fun onOpen(connection: SQLiteConnection) {
+        connection.execSQL("PRAGMA foreign_keys = ON")
+        internalInitInvalidationTracker(connection)
+      }
+
+      public override fun onPreMigrate(connection: SQLiteConnection) {
+        dropFtsSyncTriggers(connection)
+      }
+
+      public override fun onPostMigrate(connection: SQLiteConnection) {
+      }
+
+      public override fun onValidateSchema(connection: SQLiteConnection): RoomOpenDelegate.ValidationResult {
+        val _columnsItems: MutableMap<String, TableInfo.Column> = mutableMapOf()
+        _columnsItems.put("itemId", TableInfo.Column("itemId", "INTEGER", true, 1, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsItems.put("tradeName", TableInfo.Column("tradeName", "TEXT", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsItems.put("activeIngredient", TableInfo.Column("activeIngredient", "TEXT", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsItems.put("strength", TableInfo.Column("strength", "TEXT", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsItems.put("dosageForm", TableInfo.Column("dosageForm", "TEXT", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsItems.put("company", TableInfo.Column("company", "TEXT", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsItems.put("category", TableInfo.Column("category", "TEXT", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsItems.put("location", TableInfo.Column("location", "TEXT", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsItems.put("barcode", TableInfo.Column("barcode", "TEXT", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsItems.put("requiresPrescription", TableInfo.Column("requiresPrescription", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsItems.put("stripsPerBox", TableInfo.Column("stripsPerBox", "INTEGER", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsItems.put("boxSalePrice", TableInfo.Column("boxSalePrice", "INTEGER", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsItems.put("reorderLevel", TableInfo.Column("reorderLevel", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsItems.put("isActive", TableInfo.Column("isActive", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsItems.put("createdAt", TableInfo.Column("createdAt", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        val _foreignKeysItems: MutableSet<TableInfo.ForeignKey> = mutableSetOf()
+        val _indicesItems: MutableSet<TableInfo.Index> = mutableSetOf()
+        _indicesItems.add(TableInfo.Index("index_items_barcode", true, listOf("barcode"), listOf("ASC")))
+        _indicesItems.add(TableInfo.Index("index_items_tradeName", false, listOf("tradeName"), listOf("ASC")))
+        _indicesItems.add(TableInfo.Index("index_items_tradeName_activeIngredient_strength_dosageForm_company", true, listOf("tradeName", "activeIngredient", "strength", "dosageForm", "company"), listOf("ASC", "ASC", "ASC", "ASC", "ASC")))
+        val _infoItems: TableInfo = TableInfo("items", _columnsItems, _foreignKeysItems, _indicesItems)
+        val _existingItems: TableInfo = read(connection, "items")
+        if (!_infoItems.equals(_existingItems)) {
+          return RoomOpenDelegate.ValidationResult(false, """
+              |items(com.example.myapplication.data.v8.entity.ItemEntity).
+              | Expected:
+              |""".trimMargin() + _infoItems + """
+              |
+              | Found:
+              |""".trimMargin() + _existingItems)
+        }
+        val _columnsItemChanges: MutableMap<String, TableInfo.Column> = mutableMapOf()
+        _columnsItemChanges.put("changeId", TableInfo.Column("changeId", "INTEGER", true, 1, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsItemChanges.put("itemId", TableInfo.Column("itemId", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsItemChanges.put("changedAt", TableInfo.Column("changedAt", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsItemChanges.put("fieldName", TableInfo.Column("fieldName", "TEXT", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsItemChanges.put("oldValue", TableInfo.Column("oldValue", "TEXT", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsItemChanges.put("newValue", TableInfo.Column("newValue", "TEXT", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsItemChanges.put("reason", TableInfo.Column("reason", "TEXT", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        val _foreignKeysItemChanges: MutableSet<TableInfo.ForeignKey> = mutableSetOf()
+        _foreignKeysItemChanges.add(TableInfo.ForeignKey("items", "RESTRICT", "NO ACTION", listOf("itemId"), listOf("itemId")))
+        val _indicesItemChanges: MutableSet<TableInfo.Index> = mutableSetOf()
+        _indicesItemChanges.add(TableInfo.Index("index_item_changes_itemId", false, listOf("itemId"), listOf("ASC")))
+        val _infoItemChanges: TableInfo = TableInfo("item_changes", _columnsItemChanges, _foreignKeysItemChanges, _indicesItemChanges)
+        val _existingItemChanges: TableInfo = read(connection, "item_changes")
+        if (!_infoItemChanges.equals(_existingItemChanges)) {
+          return RoomOpenDelegate.ValidationResult(false, """
+              |item_changes(com.example.myapplication.data.v8.entity.ItemChangeEntity).
+              | Expected:
+              |""".trimMargin() + _infoItemChanges + """
+              |
+              | Found:
+              |""".trimMargin() + _existingItemChanges)
+        }
+        val _columnsSuppliers: MutableMap<String, TableInfo.Column> = mutableMapOf()
+        _columnsSuppliers.put("supplierId", TableInfo.Column("supplierId", "INTEGER", true, 1, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSuppliers.put("name", TableInfo.Column("name", "TEXT", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSuppliers.put("phone", TableInfo.Column("phone", "TEXT", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSuppliers.put("notes", TableInfo.Column("notes", "TEXT", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSuppliers.put("isActive", TableInfo.Column("isActive", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSuppliers.put("createdAt", TableInfo.Column("createdAt", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        val _foreignKeysSuppliers: MutableSet<TableInfo.ForeignKey> = mutableSetOf()
+        val _indicesSuppliers: MutableSet<TableInfo.Index> = mutableSetOf()
+        _indicesSuppliers.add(TableInfo.Index("index_suppliers_name", true, listOf("name"), listOf("ASC")))
+        val _infoSuppliers: TableInfo = TableInfo("suppliers", _columnsSuppliers, _foreignKeysSuppliers, _indicesSuppliers)
+        val _existingSuppliers: TableInfo = read(connection, "suppliers")
+        if (!_infoSuppliers.equals(_existingSuppliers)) {
+          return RoomOpenDelegate.ValidationResult(false, """
+              |suppliers(com.example.myapplication.data.v8.entity.SupplierEntity).
+              | Expected:
+              |""".trimMargin() + _infoSuppliers + """
+              |
+              | Found:
+              |""".trimMargin() + _existingSuppliers)
+        }
+        val _columnsSupplierEntries: MutableMap<String, TableInfo.Column> = mutableMapOf()
+        _columnsSupplierEntries.put("entryId", TableInfo.Column("entryId", "INTEGER", true, 1, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSupplierEntries.put("supplierId", TableInfo.Column("supplierId", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSupplierEntries.put("type", TableInfo.Column("type", "TEXT", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSupplierEntries.put("amount", TableInfo.Column("amount", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSupplierEntries.put("entryDate", TableInfo.Column("entryDate", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSupplierEntries.put("status", TableInfo.Column("status", "TEXT", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSupplierEntries.put("reference", TableInfo.Column("reference", "TEXT", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSupplierEntries.put("note", TableInfo.Column("note", "TEXT", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        val _foreignKeysSupplierEntries: MutableSet<TableInfo.ForeignKey> = mutableSetOf()
+        _foreignKeysSupplierEntries.add(TableInfo.ForeignKey("suppliers", "RESTRICT", "NO ACTION", listOf("supplierId"), listOf("supplierId")))
+        val _indicesSupplierEntries: MutableSet<TableInfo.Index> = mutableSetOf()
+        _indicesSupplierEntries.add(TableInfo.Index("index_supplier_entries_supplierId", false, listOf("supplierId"), listOf("ASC")))
+        _indicesSupplierEntries.add(TableInfo.Index("index_supplier_entries_entryDate", false, listOf("entryDate"), listOf("ASC")))
+        val _infoSupplierEntries: TableInfo = TableInfo("supplier_entries", _columnsSupplierEntries, _foreignKeysSupplierEntries, _indicesSupplierEntries)
+        val _existingSupplierEntries: TableInfo = read(connection, "supplier_entries")
+        if (!_infoSupplierEntries.equals(_existingSupplierEntries)) {
+          return RoomOpenDelegate.ValidationResult(false, """
+              |supplier_entries(com.example.myapplication.data.v8.entity.SupplierEntryEntity).
+              | Expected:
+              |""".trimMargin() + _infoSupplierEntries + """
+              |
+              | Found:
+              |""".trimMargin() + _existingSupplierEntries)
+        }
+        val _columnsPurchaseInvoices: MutableMap<String, TableInfo.Column> = mutableMapOf()
+        _columnsPurchaseInvoices.put("purchaseId", TableInfo.Column("purchaseId", "INTEGER", true, 1, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsPurchaseInvoices.put("supplierId", TableInfo.Column("supplierId", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsPurchaseInvoices.put("supplierInvoiceNo", TableInfo.Column("supplierInvoiceNo", "TEXT", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsPurchaseInvoices.put("status", TableInfo.Column("status", "TEXT", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsPurchaseInvoices.put("invoiceDate", TableInfo.Column("invoiceDate", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsPurchaseInvoices.put("generalDiscount", TableInfo.Column("generalDiscount", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsPurchaseInvoices.put("netTotal", TableInfo.Column("netTotal", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsPurchaseInvoices.put("requestUuid", TableInfo.Column("requestUuid", "TEXT", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsPurchaseInvoices.put("createdAt", TableInfo.Column("createdAt", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsPurchaseInvoices.put("confirmedAt", TableInfo.Column("confirmedAt", "INTEGER", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        val _foreignKeysPurchaseInvoices: MutableSet<TableInfo.ForeignKey> = mutableSetOf()
+        _foreignKeysPurchaseInvoices.add(TableInfo.ForeignKey("suppliers", "RESTRICT", "NO ACTION", listOf("supplierId"), listOf("supplierId")))
+        val _indicesPurchaseInvoices: MutableSet<TableInfo.Index> = mutableSetOf()
+        _indicesPurchaseInvoices.add(TableInfo.Index("index_purchase_invoices_supplierId", false, listOf("supplierId"), listOf("ASC")))
+        _indicesPurchaseInvoices.add(TableInfo.Index("index_purchase_invoices_requestUuid", true, listOf("requestUuid"), listOf("ASC")))
+        _indicesPurchaseInvoices.add(TableInfo.Index("index_purchase_invoices_invoiceDate", false, listOf("invoiceDate"), listOf("ASC")))
+        val _infoPurchaseInvoices: TableInfo = TableInfo("purchase_invoices", _columnsPurchaseInvoices, _foreignKeysPurchaseInvoices, _indicesPurchaseInvoices)
+        val _existingPurchaseInvoices: TableInfo = read(connection, "purchase_invoices")
+        if (!_infoPurchaseInvoices.equals(_existingPurchaseInvoices)) {
+          return RoomOpenDelegate.ValidationResult(false, """
+              |purchase_invoices(com.example.myapplication.data.v8.entity.PurchaseInvoiceEntity).
+              | Expected:
+              |""".trimMargin() + _infoPurchaseInvoices + """
+              |
+              | Found:
+              |""".trimMargin() + _existingPurchaseInvoices)
+        }
+        val _columnsPurchaseLines: MutableMap<String, TableInfo.Column> = mutableMapOf()
+        _columnsPurchaseLines.put("lineId", TableInfo.Column("lineId", "INTEGER", true, 1, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsPurchaseLines.put("purchaseId", TableInfo.Column("purchaseId", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsPurchaseLines.put("itemId", TableInfo.Column("itemId", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsPurchaseLines.put("baseUnitsPerBox", TableInfo.Column("baseUnitsPerBox", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsPurchaseLines.put("paidQty", TableInfo.Column("paidQty", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsPurchaseLines.put("freeQty", TableInfo.Column("freeQty", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsPurchaseLines.put("lineTotal", TableInfo.Column("lineTotal", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsPurchaseLines.put("lineDiscount", TableInfo.Column("lineDiscount", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsPurchaseLines.put("expiryDate", TableInfo.Column("expiryDate", "INTEGER", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsPurchaseLines.put("costIsEstimated", TableInfo.Column("costIsEstimated", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        val _foreignKeysPurchaseLines: MutableSet<TableInfo.ForeignKey> = mutableSetOf()
+        _foreignKeysPurchaseLines.add(TableInfo.ForeignKey("purchase_invoices", "RESTRICT", "NO ACTION", listOf("purchaseId"), listOf("purchaseId")))
+        _foreignKeysPurchaseLines.add(TableInfo.ForeignKey("items", "RESTRICT", "NO ACTION", listOf("itemId"), listOf("itemId")))
+        val _indicesPurchaseLines: MutableSet<TableInfo.Index> = mutableSetOf()
+        _indicesPurchaseLines.add(TableInfo.Index("index_purchase_lines_purchaseId", false, listOf("purchaseId"), listOf("ASC")))
+        _indicesPurchaseLines.add(TableInfo.Index("index_purchase_lines_itemId", false, listOf("itemId"), listOf("ASC")))
+        val _infoPurchaseLines: TableInfo = TableInfo("purchase_lines", _columnsPurchaseLines, _foreignKeysPurchaseLines, _indicesPurchaseLines)
+        val _existingPurchaseLines: TableInfo = read(connection, "purchase_lines")
+        if (!_infoPurchaseLines.equals(_existingPurchaseLines)) {
+          return RoomOpenDelegate.ValidationResult(false, """
+              |purchase_lines(com.example.myapplication.data.v8.entity.PurchaseLineEntity).
+              | Expected:
+              |""".trimMargin() + _infoPurchaseLines + """
+              |
+              | Found:
+              |""".trimMargin() + _existingPurchaseLines)
+        }
+        val _columnsBatches: MutableMap<String, TableInfo.Column> = mutableMapOf()
+        _columnsBatches.put("batchId", TableInfo.Column("batchId", "INTEGER", true, 1, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsBatches.put("itemId", TableInfo.Column("itemId", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsBatches.put("baseUnitsPerBox", TableInfo.Column("baseUnitsPerBox", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsBatches.put("source", TableInfo.Column("source", "TEXT", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsBatches.put("purchaseLineId", TableInfo.Column("purchaseLineId", "INTEGER", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsBatches.put("parentBatchId", TableInfo.Column("parentBatchId", "INTEGER", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsBatches.put("qtyReceived", TableInfo.Column("qtyReceived", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsBatches.put("qtyRemaining", TableInfo.Column("qtyRemaining", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsBatches.put("qtySupplierReturned", TableInfo.Column("qtySupplierReturned", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsBatches.put("costRemaining", TableInfo.Column("costRemaining", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsBatches.put("costIsEstimated", TableInfo.Column("costIsEstimated", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsBatches.put("salePrice", TableInfo.Column("salePrice", "INTEGER", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsBatches.put("expiryDate", TableInfo.Column("expiryDate", "INTEGER", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsBatches.put("receivedAt", TableInfo.Column("receivedAt", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsBatches.put("isSellable", TableInfo.Column("isSellable", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        val _foreignKeysBatches: MutableSet<TableInfo.ForeignKey> = mutableSetOf()
+        _foreignKeysBatches.add(TableInfo.ForeignKey("items", "RESTRICT", "NO ACTION", listOf("itemId"), listOf("itemId")))
+        _foreignKeysBatches.add(TableInfo.ForeignKey("purchase_lines", "RESTRICT", "NO ACTION", listOf("purchaseLineId"), listOf("lineId")))
+        _foreignKeysBatches.add(TableInfo.ForeignKey("batches", "RESTRICT", "NO ACTION", listOf("parentBatchId"), listOf("batchId")))
+        val _indicesBatches: MutableSet<TableInfo.Index> = mutableSetOf()
+        _indicesBatches.add(TableInfo.Index("index_batches_itemId_isSellable_expiryDate", false, listOf("itemId", "isSellable", "expiryDate"), listOf("ASC", "ASC", "ASC")))
+        _indicesBatches.add(TableInfo.Index("index_batches_purchaseLineId", true, listOf("purchaseLineId"), listOf("ASC")))
+        _indicesBatches.add(TableInfo.Index("index_batches_parentBatchId", false, listOf("parentBatchId"), listOf("ASC")))
+        val _infoBatches: TableInfo = TableInfo("batches", _columnsBatches, _foreignKeysBatches, _indicesBatches)
+        val _existingBatches: TableInfo = read(connection, "batches")
+        if (!_infoBatches.equals(_existingBatches)) {
+          return RoomOpenDelegate.ValidationResult(false, """
+              |batches(com.example.myapplication.data.v8.entity.BatchEntity).
+              | Expected:
+              |""".trimMargin() + _infoBatches + """
+              |
+              | Found:
+              |""".trimMargin() + _existingBatches)
+        }
+        val _columnsStockMovements: MutableMap<String, TableInfo.Column> = mutableMapOf()
+        _columnsStockMovements.put("movementId", TableInfo.Column("movementId", "INTEGER", true, 1, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsStockMovements.put("movementDate", TableInfo.Column("movementDate", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsStockMovements.put("type", TableInfo.Column("type", "TEXT", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsStockMovements.put("batchId", TableInfo.Column("batchId", "INTEGER", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsStockMovements.put("itemId", TableInfo.Column("itemId", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsStockMovements.put("qtyDelta", TableInfo.Column("qtyDelta", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsStockMovements.put("costDelta", TableInfo.Column("costDelta", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsStockMovements.put("invoiceRef", TableInfo.Column("invoiceRef", "TEXT", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsStockMovements.put("saleId", TableInfo.Column("saleId", "INTEGER", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsStockMovements.put("allocId", TableInfo.Column("allocId", "INTEGER", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsStockMovements.put("reversesMovementId", TableInfo.Column("reversesMovementId", "INTEGER", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsStockMovements.put("reason", TableInfo.Column("reason", "TEXT", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsStockMovements.put("note", TableInfo.Column("note", "TEXT", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        val _foreignKeysStockMovements: MutableSet<TableInfo.ForeignKey> = mutableSetOf()
+        _foreignKeysStockMovements.add(TableInfo.ForeignKey("items", "RESTRICT", "NO ACTION", listOf("itemId"), listOf("itemId")))
+        _foreignKeysStockMovements.add(TableInfo.ForeignKey("batches", "RESTRICT", "NO ACTION", listOf("batchId"), listOf("batchId")))
+        _foreignKeysStockMovements.add(TableInfo.ForeignKey("sales_invoices", "RESTRICT", "NO ACTION", listOf("saleId"), listOf("saleId")))
+        _foreignKeysStockMovements.add(TableInfo.ForeignKey("sale_allocations", "RESTRICT", "NO ACTION", listOf("allocId"), listOf("allocId")))
+        _foreignKeysStockMovements.add(TableInfo.ForeignKey("stock_movements", "RESTRICT", "NO ACTION", listOf("reversesMovementId"), listOf("movementId")))
+        val _indicesStockMovements: MutableSet<TableInfo.Index> = mutableSetOf()
+        _indicesStockMovements.add(TableInfo.Index("index_stock_movements_itemId", false, listOf("itemId"), listOf("ASC")))
+        _indicesStockMovements.add(TableInfo.Index("index_stock_movements_batchId_qtyDelta_costDelta", false, listOf("batchId", "qtyDelta", "costDelta"), listOf("ASC", "ASC", "ASC")))
+        _indicesStockMovements.add(TableInfo.Index("index_stock_movements_movementDate", false, listOf("movementDate"), listOf("ASC")))
+        _indicesStockMovements.add(TableInfo.Index("index_stock_movements_type_movementDate", false, listOf("type", "movementDate"), listOf("ASC", "ASC")))
+        _indicesStockMovements.add(TableInfo.Index("index_stock_movements_invoiceRef", false, listOf("invoiceRef"), listOf("ASC")))
+        _indicesStockMovements.add(TableInfo.Index("index_stock_movements_saleId", false, listOf("saleId"), listOf("ASC")))
+        _indicesStockMovements.add(TableInfo.Index("index_stock_movements_allocId", true, listOf("allocId"), listOf("ASC")))
+        _indicesStockMovements.add(TableInfo.Index("index_stock_movements_reversesMovementId", true, listOf("reversesMovementId"), listOf("ASC")))
+        val _infoStockMovements: TableInfo = TableInfo("stock_movements", _columnsStockMovements, _foreignKeysStockMovements, _indicesStockMovements)
+        val _existingStockMovements: TableInfo = read(connection, "stock_movements")
+        if (!_infoStockMovements.equals(_existingStockMovements)) {
+          return RoomOpenDelegate.ValidationResult(false, """
+              |stock_movements(com.example.myapplication.data.v8.entity.StockMovementEntity).
+              | Expected:
+              |""".trimMargin() + _infoStockMovements + """
+              |
+              | Found:
+              |""".trimMargin() + _existingStockMovements)
+        }
+        val _columnsSalesInvoices: MutableMap<String, TableInfo.Column> = mutableMapOf()
+        _columnsSalesInvoices.put("saleId", TableInfo.Column("saleId", "INTEGER", true, 1, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSalesInvoices.put("displayNo", TableInfo.Column("displayNo", "TEXT", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSalesInvoices.put("status", TableInfo.Column("status", "TEXT", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSalesInvoices.put("confirmedAt", TableInfo.Column("confirmedAt", "INTEGER", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSalesInvoices.put("cancelledAt", TableInfo.Column("cancelledAt", "INTEGER", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSalesInvoices.put("cancelReason", TableInfo.Column("cancelReason", "TEXT", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSalesInvoices.put("customerName", TableInfo.Column("customerName", "TEXT", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSalesInvoices.put("prescriptionImageName", TableInfo.Column("prescriptionImageName", "TEXT", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSalesInvoices.put("grossTotal", TableInfo.Column("grossTotal", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSalesInvoices.put("discountTotal", TableInfo.Column("discountTotal", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSalesInvoices.put("netTotal", TableInfo.Column("netTotal", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSalesInvoices.put("cartUuid", TableInfo.Column("cartUuid", "TEXT", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        val _foreignKeysSalesInvoices: MutableSet<TableInfo.ForeignKey> = mutableSetOf()
+        val _indicesSalesInvoices: MutableSet<TableInfo.Index> = mutableSetOf()
+        _indicesSalesInvoices.add(TableInfo.Index("index_sales_invoices_displayNo", true, listOf("displayNo"), listOf("ASC")))
+        _indicesSalesInvoices.add(TableInfo.Index("index_sales_invoices_cartUuid", true, listOf("cartUuid"), listOf("ASC")))
+        _indicesSalesInvoices.add(TableInfo.Index("index_sales_invoices_confirmedAt", false, listOf("confirmedAt"), listOf("ASC")))
+        val _infoSalesInvoices: TableInfo = TableInfo("sales_invoices", _columnsSalesInvoices, _foreignKeysSalesInvoices, _indicesSalesInvoices)
+        val _existingSalesInvoices: TableInfo = read(connection, "sales_invoices")
+        if (!_infoSalesInvoices.equals(_existingSalesInvoices)) {
+          return RoomOpenDelegate.ValidationResult(false, """
+              |sales_invoices(com.example.myapplication.data.v8.entity.SalesInvoiceEntity).
+              | Expected:
+              |""".trimMargin() + _infoSalesInvoices + """
+              |
+              | Found:
+              |""".trimMargin() + _existingSalesInvoices)
+        }
+        val _columnsSalesLines: MutableMap<String, TableInfo.Column> = mutableMapOf()
+        _columnsSalesLines.put("lineId", TableInfo.Column("lineId", "INTEGER", true, 1, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSalesLines.put("saleId", TableInfo.Column("saleId", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSalesLines.put("itemId", TableInfo.Column("itemId", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSalesLines.put("unitType", TableInfo.Column("unitType", "TEXT", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSalesLines.put("qty", TableInfo.Column("qty", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSalesLines.put("stripsPerBoxFrozen", TableInfo.Column("stripsPerBoxFrozen", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSalesLines.put("baseQty", TableInfo.Column("baseQty", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSalesLines.put("unitPrice", TableInfo.Column("unitPrice", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSalesLines.put("lineDiscount", TableInfo.Column("lineDiscount", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSalesLines.put("lineTotal", TableInfo.Column("lineTotal", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        val _foreignKeysSalesLines: MutableSet<TableInfo.ForeignKey> = mutableSetOf()
+        _foreignKeysSalesLines.add(TableInfo.ForeignKey("sales_invoices", "RESTRICT", "NO ACTION", listOf("saleId"), listOf("saleId")))
+        _foreignKeysSalesLines.add(TableInfo.ForeignKey("items", "RESTRICT", "NO ACTION", listOf("itemId"), listOf("itemId")))
+        val _indicesSalesLines: MutableSet<TableInfo.Index> = mutableSetOf()
+        _indicesSalesLines.add(TableInfo.Index("index_sales_lines_saleId", false, listOf("saleId"), listOf("ASC")))
+        _indicesSalesLines.add(TableInfo.Index("index_sales_lines_itemId", false, listOf("itemId"), listOf("ASC")))
+        val _infoSalesLines: TableInfo = TableInfo("sales_lines", _columnsSalesLines, _foreignKeysSalesLines, _indicesSalesLines)
+        val _existingSalesLines: TableInfo = read(connection, "sales_lines")
+        if (!_infoSalesLines.equals(_existingSalesLines)) {
+          return RoomOpenDelegate.ValidationResult(false, """
+              |sales_lines(com.example.myapplication.data.v8.entity.SalesLineEntity).
+              | Expected:
+              |""".trimMargin() + _infoSalesLines + """
+              |
+              | Found:
+              |""".trimMargin() + _existingSalesLines)
+        }
+        val _columnsSaleAllocations: MutableMap<String, TableInfo.Column> = mutableMapOf()
+        _columnsSaleAllocations.put("allocId", TableInfo.Column("allocId", "INTEGER", true, 1, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSaleAllocations.put("lineId", TableInfo.Column("lineId", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSaleAllocations.put("batchId", TableInfo.Column("batchId", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSaleAllocations.put("qtyBase", TableInfo.Column("qtyBase", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSaleAllocations.put("revenueFrozen", TableInfo.Column("revenueFrozen", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSaleAllocations.put("costFrozen", TableInfo.Column("costFrozen", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        val _foreignKeysSaleAllocations: MutableSet<TableInfo.ForeignKey> = mutableSetOf()
+        _foreignKeysSaleAllocations.add(TableInfo.ForeignKey("sales_lines", "RESTRICT", "NO ACTION", listOf("lineId"), listOf("lineId")))
+        _foreignKeysSaleAllocations.add(TableInfo.ForeignKey("batches", "RESTRICT", "NO ACTION", listOf("batchId"), listOf("batchId")))
+        val _indicesSaleAllocations: MutableSet<TableInfo.Index> = mutableSetOf()
+        _indicesSaleAllocations.add(TableInfo.Index("index_sale_allocations_lineId", false, listOf("lineId"), listOf("ASC")))
+        _indicesSaleAllocations.add(TableInfo.Index("index_sale_allocations_batchId", false, listOf("batchId"), listOf("ASC")))
+        val _infoSaleAllocations: TableInfo = TableInfo("sale_allocations", _columnsSaleAllocations, _foreignKeysSaleAllocations, _indicesSaleAllocations)
+        val _existingSaleAllocations: TableInfo = read(connection, "sale_allocations")
+        if (!_infoSaleAllocations.equals(_existingSaleAllocations)) {
+          return RoomOpenDelegate.ValidationResult(false, """
+              |sale_allocations(com.example.myapplication.data.v8.entity.SaleAllocationEntity).
+              | Expected:
+              |""".trimMargin() + _infoSaleAllocations + """
+              |
+              | Found:
+              |""".trimMargin() + _existingSaleAllocations)
+        }
+        val _columnsInvoiceCounters: MutableMap<String, TableInfo.Column> = mutableMapOf()
+        _columnsInvoiceCounters.put("yearMonth", TableInfo.Column("yearMonth", "INTEGER", true, 1, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsInvoiceCounters.put("lastNumber", TableInfo.Column("lastNumber", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        val _foreignKeysInvoiceCounters: MutableSet<TableInfo.ForeignKey> = mutableSetOf()
+        val _indicesInvoiceCounters: MutableSet<TableInfo.Index> = mutableSetOf()
+        val _infoInvoiceCounters: TableInfo = TableInfo("invoice_counters", _columnsInvoiceCounters, _foreignKeysInvoiceCounters, _indicesInvoiceCounters)
+        val _existingInvoiceCounters: TableInfo = read(connection, "invoice_counters")
+        if (!_infoInvoiceCounters.equals(_existingInvoiceCounters)) {
+          return RoomOpenDelegate.ValidationResult(false, """
+              |invoice_counters(com.example.myapplication.data.v8.entity.InvoiceCounterEntity).
+              | Expected:
+              |""".trimMargin() + _infoInvoiceCounters + """
+              |
+              | Found:
+              |""".trimMargin() + _existingInvoiceCounters)
+        }
+        val _columnsExpenses: MutableMap<String, TableInfo.Column> = mutableMapOf()
+        _columnsExpenses.put("expenseId", TableInfo.Column("expenseId", "INTEGER", true, 1, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsExpenses.put("expenseDate", TableInfo.Column("expenseDate", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsExpenses.put("category", TableInfo.Column("category", "TEXT", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsExpenses.put("description", TableInfo.Column("description", "TEXT", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsExpenses.put("amount", TableInfo.Column("amount", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsExpenses.put("status", TableInfo.Column("status", "TEXT", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        val _foreignKeysExpenses: MutableSet<TableInfo.ForeignKey> = mutableSetOf()
+        val _indicesExpenses: MutableSet<TableInfo.Index> = mutableSetOf()
+        _indicesExpenses.add(TableInfo.Index("index_expenses_expenseDate", false, listOf("expenseDate"), listOf("ASC")))
+        val _infoExpenses: TableInfo = TableInfo("expenses", _columnsExpenses, _foreignKeysExpenses, _indicesExpenses)
+        val _existingExpenses: TableInfo = read(connection, "expenses")
+        if (!_infoExpenses.equals(_existingExpenses)) {
+          return RoomOpenDelegate.ValidationResult(false, """
+              |expenses(com.example.myapplication.data.v8.entity.ExpenseEntity).
+              | Expected:
+              |""".trimMargin() + _infoExpenses + """
+              |
+              | Found:
+              |""".trimMargin() + _existingExpenses)
+        }
+        val _columnsCashEntries: MutableMap<String, TableInfo.Column> = mutableMapOf()
+        _columnsCashEntries.put("entryId", TableInfo.Column("entryId", "INTEGER", true, 1, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsCashEntries.put("entryDate", TableInfo.Column("entryDate", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsCashEntries.put("type", TableInfo.Column("type", "TEXT", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsCashEntries.put("amount", TableInfo.Column("amount", "INTEGER", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsCashEntries.put("note", TableInfo.Column("note", "TEXT", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsCashEntries.put("status", TableInfo.Column("status", "TEXT", true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        val _foreignKeysCashEntries: MutableSet<TableInfo.ForeignKey> = mutableSetOf()
+        val _indicesCashEntries: MutableSet<TableInfo.Index> = mutableSetOf()
+        _indicesCashEntries.add(TableInfo.Index("index_cash_entries_entryDate", false, listOf("entryDate"), listOf("ASC")))
+        val _infoCashEntries: TableInfo = TableInfo("cash_entries", _columnsCashEntries, _foreignKeysCashEntries, _indicesCashEntries)
+        val _existingCashEntries: TableInfo = read(connection, "cash_entries")
+        if (!_infoCashEntries.equals(_existingCashEntries)) {
+          return RoomOpenDelegate.ValidationResult(false, """
+              |cash_entries(com.example.myapplication.data.v8.entity.CashEntryEntity).
+              | Expected:
+              |""".trimMargin() + _infoCashEntries + """
+              |
+              | Found:
+              |""".trimMargin() + _existingCashEntries)
+        }
+        val _columnsSettings: MutableMap<String, TableInfo.Column> = mutableMapOf()
+        _columnsSettings.put("key", TableInfo.Column("key", "TEXT", true, 1, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSettings.put("value", TableInfo.Column("value", "TEXT", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsSettings.put("description", TableInfo.Column("description", "TEXT", false, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        val _foreignKeysSettings: MutableSet<TableInfo.ForeignKey> = mutableSetOf()
+        val _indicesSettings: MutableSet<TableInfo.Index> = mutableSetOf()
+        val _infoSettings: TableInfo = TableInfo("settings", _columnsSettings, _foreignKeysSettings, _indicesSettings)
+        val _existingSettings: TableInfo = read(connection, "settings")
+        if (!_infoSettings.equals(_existingSettings)) {
+          return RoomOpenDelegate.ValidationResult(false, """
+              |settings(com.example.myapplication.data.v8.entity.SettingEntity).
+              | Expected:
+              |""".trimMargin() + _infoSettings + """
+              |
+              | Found:
+              |""".trimMargin() + _existingSettings)
+        }
+        return RoomOpenDelegate.ValidationResult(true, null)
+      }
+    }
+    return _openDelegate
+  }
+
+  protected override fun createInvalidationTracker(): InvalidationTracker {
+    val _shadowTablesMap: MutableMap<String, String> = mutableMapOf()
+    val _viewTables: MutableMap<String, Set<String>> = mutableMapOf()
+    return InvalidationTracker(this, _shadowTablesMap, _viewTables, "items", "item_changes", "suppliers", "supplier_entries", "purchase_invoices", "purchase_lines", "batches", "stock_movements", "sales_invoices", "sales_lines", "sale_allocations", "invoice_counters", "expenses", "cash_entries", "settings")
+  }
+
+  public override fun clearAllTables() {
+    super.performClear(true, "item_changes", "items", "supplier_entries", "purchase_invoices", "suppliers", "stock_movements", "batches", "purchase_lines", "sale_allocations", "sales_lines", "sales_invoices", "invoice_counters", "expenses", "cash_entries", "settings")
+  }
+
+  protected override fun getRequiredTypeConverterClasses(): Map<KClass<*>, List<KClass<*>>> {
+    val _typeConvertersMap: MutableMap<KClass<*>, List<KClass<*>>> = mutableMapOf()
+    _typeConvertersMap.put(ItemDao::class, ItemDao_Impl.getRequiredConverters())
+    _typeConvertersMap.put(SupplierDao::class, SupplierDao_Impl.getRequiredConverters())
+    _typeConvertersMap.put(PurchaseDao::class, PurchaseDao_Impl.getRequiredConverters())
+    _typeConvertersMap.put(BatchDao::class, BatchDao_Impl.getRequiredConverters())
+    _typeConvertersMap.put(StockMovementDao::class, StockMovementDao_Impl.getRequiredConverters())
+    _typeConvertersMap.put(SalesDao::class, SalesDao_Impl.getRequiredConverters())
+    _typeConvertersMap.put(FinanceDao::class, FinanceDao_Impl.getRequiredConverters())
+    _typeConvertersMap.put(SettingDao::class, SettingDao_Impl.getRequiredConverters())
+    return _typeConvertersMap
+  }
+
+  public override fun getRequiredAutoMigrationSpecClasses(): Set<KClass<out AutoMigrationSpec>> {
+    val _autoMigrationSpecsSet: MutableSet<KClass<out AutoMigrationSpec>> = mutableSetOf()
+    return _autoMigrationSpecsSet
+  }
+
+  public override fun createAutoMigrations(autoMigrationSpecs: Map<KClass<out AutoMigrationSpec>, AutoMigrationSpec>): List<Migration> {
+    val _autoMigrations: MutableList<Migration> = mutableListOf()
+    return _autoMigrations
+  }
+
+  public override fun itemDao(): ItemDao = _itemDao.value
+
+  public override fun supplierDao(): SupplierDao = _supplierDao.value
+
+  public override fun purchaseDao(): PurchaseDao = _purchaseDao.value
+
+  public override fun batchDao(): BatchDao = _batchDao.value
+
+  public override fun stockMovementDao(): StockMovementDao = _stockMovementDao.value
+
+  public override fun salesDao(): SalesDao = _salesDao.value
+
+  public override fun financeDao(): FinanceDao = _financeDao.value
+
+  public override fun settingDao(): SettingDao = _settingDao.value
+}
+n========== TEST XML ==========
+<?xml version='1.0' encoding='UTF-8' ?>
+<testsuites tests="1" failures="1" errors="0" skipped="0" time="0.000" timestamp="2026-11-25T14:26:32" hostname="localhost">
+  <testsuite name="com.example.myapplication.data.v8.InvoiceNumberAllocatorTest" tests="1" failures="1" errors="0" skipped="0" time="0.006" timestamp="2026-11-25T14:26:32" hostname="localhost">
+    <properties>
+      <property name="device" value="6P6TKJNB5DOJHQ4T" />
+    </properties>
+    <testcase name="suffixCollisionRegeneratesOnlySuffix" classname="com.example.myapplication.data.v8.InvoiceNumberAllocatorTest" time="0.006">
+      <failure>java.lang.AssertionError: Raw SQLite counter rows expected:&lt;[202611:1]&gt; but was:&lt;[]&gt;
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.failNotEquals(Assert.java:835)
+	at org.junit.Assert.assertEquals(Assert.java:120)
+	at com.example.myapplication.data.v8.InvoiceNumberAllocatorTest$suffixCollisionRegeneratesOnlySuffix$1.invokeSuspend(InvoiceNumberAllocatorTest.kt:130)
+	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:33)
+	at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:101)
+	at kotlinx.coroutines.EventLoopImplBase.processNextEvent(EventLoop.common.kt:263)
+	at kotlinx.coroutines.BlockingCoroutine.joinBlocking(Builders.kt:95)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking(Builders.kt:69)
+	at kotlinx.coroutines.BuildersKt.runBlocking(dex-id-7556b4461a2b401dfde426a4564cdce91ee23ea0:1)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking$default(Builders.kt:47)
+	at kotlinx.coroutines.BuildersKt.runBlocking$default(dex-id-7556b4461a2b401dfde426a4564cdce91ee23ea0:1)
+	at com.example.myapplication.data.v8.InvoiceNumberAllocatorTest.suffixCollisionRegeneratesOnlySuffix(InvoiceNumberAllocatorTest.kt:108)
+</failure>
+    </testcase>
+  </testsuite>
+</testsuites>
+n========== END ==========

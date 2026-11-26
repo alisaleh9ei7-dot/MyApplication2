@@ -91,6 +91,42 @@ abstract class PharmacyDatabaseV8 : RoomDatabase() {
             """CREATE TRIGGER trg_batches_no_delete BEFORE DELETE ON batches
                BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_RECORD_DELETE_NOT_ALLOWED'); END""",
 
+            // D1: لا تُنشأ فاتورة مؤكدة مباشرة؛ تبدأ كل فاتورة PENDING بلا أوقات انتقال.
+            """CREATE TRIGGER trg_sales_invoice_initial_state
+               BEFORE INSERT ON sales_invoices
+               WHEN NEW.status <> 'PENDING'
+                 OR NEW.confirmedAt IS NOT NULL
+                 OR NEW.cancelledAt IS NOT NULL
+                 OR NEW.cancelReason IS NOT NULL
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_SALE_INITIAL_STATE_INVALID'); END""",
+
+            // D1: الانتقالات المسموحة فقط PENDING -> CONFIRMED -> CANCELLED،
+            // مع تثبيت الطوابع الزمنية ومنع تعديلها خارج انتقال الحالة.
+            """CREATE TRIGGER trg_sales_invoice_state_transition
+               BEFORE UPDATE OF status, confirmedAt, cancelledAt, cancelReason ON sales_invoices
+               WHEN
+                 (OLD.status = 'PENDING' AND NEW.status = 'CONFIRMED' AND (
+                      NEW.confirmedAt IS NULL
+                      OR NEW.cancelledAt IS NOT NULL
+                      OR NEW.cancelReason IS NOT NULL
+                  )) OR
+                 (OLD.status = 'CONFIRMED' AND NEW.status = 'CANCELLED' AND (
+                      OLD.confirmedAt IS NULL
+                      OR NEW.confirmedAt IS NOT OLD.confirmedAt
+                      OR NEW.cancelledAt IS NULL
+                  )) OR
+                 (NEW.status = OLD.status AND (
+                      NEW.confirmedAt IS NOT OLD.confirmedAt
+                      OR NEW.cancelledAt IS NOT OLD.cancelledAt
+                      OR NEW.cancelReason IS NOT OLD.cancelReason
+                  )) OR
+                 NOT (
+                      (OLD.status = 'PENDING' AND NEW.status = 'CONFIRMED')
+                      OR (OLD.status = 'CONFIRMED' AND NEW.status = 'CANCELLED')
+                      OR (NEW.status = OLD.status)
+                 )
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_SALE_STATE_TRANSITION_INVALID'); END""",
+
             // لا حذف تاريخي للفواتير وبنود البيع والتخصيص.
             """CREATE TRIGGER trg_sales_invoices_no_delete BEFORE DELETE ON sales_invoices
                BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_RECORD_DELETE_NOT_ALLOWED'); END""",
@@ -322,6 +358,17 @@ abstract class PharmacyDatabaseV8 : RoomDatabase() {
                 "SELECT COUNT(*) FROM items WHERE stripsPerBox IS NOT NULL AND stripsPerBox < 2",
                 """SELECT COUNT(*) FROM purchase_lines
                    WHERE baseUnitsPerBox < 1""",
+                """SELECT COUNT(*) FROM sales_invoices
+                   WHERE (status = 'PENDING' AND (
+                            confirmedAt IS NOT NULL OR cancelledAt IS NOT NULL OR cancelReason IS NOT NULL
+                         ))
+                      OR (status = 'CONFIRMED' AND (
+                            confirmedAt IS NULL OR cancelledAt IS NOT NULL OR cancelReason IS NOT NULL
+                         ))
+                      OR (status = 'CANCELLED' AND (
+                            confirmedAt IS NULL OR cancelledAt IS NULL
+                         ))
+                      OR status NOT IN ('PENDING', 'CONFIRMED', 'CANCELLED')""",
                 """SELECT COUNT(*) FROM sales_lines s
                    WHERE s.stripsPerBoxFrozen < 1 OR s.qty <= 0 OR s.baseQty <= 0
                       OR (s.unitType = 'STRIP' AND

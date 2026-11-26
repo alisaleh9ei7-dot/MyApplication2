@@ -15,7 +15,7 @@ import androidx.room.PrimaryKey
 )
 data class SalesInvoiceEntity(
     @PrimaryKey(autoGenerate = true) val saleId: Long = 0,
-    val displayNo: String,              // INV-YYYYMM-NNNNNN
+    val displayNo: String,
     val status: SaleStatus = SaleStatus.PENDING,
     /** يظل null حتى تثبيت الفاتورة فعلياً. */
     val confirmedAt: Long? = null,
@@ -87,7 +87,7 @@ data class SaleAllocationEntity(
     val costFrozen: Long
 )
 
-/** عدّاد الفواتير الشهري؛ يُحدَّث داخل نفس معاملة التأكيد. yearMonth مثل 202611. */
+/** عدّاد الفواتير الشهري؛ يُحدَّث داخل نفس معاملة إنشاء الفاتورة. */
 @Entity(tableName = "invoice_counters")
 data class InvoiceCounterEntity(
     @PrimaryKey val yearMonth: Int,
@@ -95,9 +95,33 @@ data class InvoiceCounterEntity(
 )
 
 object DisplayNo {
-    /** INV-202611-000042؛ XXXX غير مفروض حتى يُعرَّف. */
-    fun format(yearMonth: Int, number: Long): String {
+    private const val ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+    /** الصيغة المعتمدة: INV-YYYYMM-NNNNNN-XXXX. */
+    fun format(yearMonth: Int, number: Long, suffix: String): String {
+        val year = yearMonth / 100
+        val month = yearMonth % 100
+        require(year in 2000..9999 && month in 1..12) { "Invalid invoice year/month" }
         require(number in 1L..999_999L) { "Monthly invoice number must be between 1 and 999999" }
-        return "INV-" + yearMonth.toString() + "-" + number.toString().padStart(6, '0')
+        require(suffix.length == 4 && suffix.all { it in ALPHABET }) {
+            "Invoice suffix must contain exactly four uppercase letters or digits"
+        }
+        return "INV-$yearMonth-${number.toString().padStart(6, '0')}-$suffix"
+    }
+
+    fun isValid(value: String): Boolean {
+        if (value.length != 22 || !value.startsWith("INV-")) return false
+        val parts = value.split('-')
+        if (parts.size != 4 || parts[0] != "INV") return false
+        val yearMonth = parts[1]
+        val number = parts[2]
+        val suffix = parts[3]
+        if (yearMonth.length != 6 || yearMonth.any { it !in '0'..'9' }) return false
+        if (number.length != 6 || number.any { it !in '0'..'9' }) return false
+        val year = yearMonth.substring(0, 4).toIntOrNull() ?: return false
+        val month = yearMonth.substring(4, 6).toIntOrNull() ?: return false
+        val sequence = number.toLongOrNull() ?: return false
+        return year in 2000..9999 && month in 1..12 && sequence in 1L..999_999L &&
+            suffix.length == 4 && suffix.all { it in ALPHABET }
     }
 }

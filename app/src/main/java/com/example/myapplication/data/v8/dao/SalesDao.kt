@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import com.example.myapplication.data.v8.entity.InvoiceCounterEntity
 import com.example.myapplication.data.v8.entity.SaleAllocationEntity
 import com.example.myapplication.data.v8.entity.SalesInvoiceEntity
 import com.example.myapplication.data.v8.entity.SalesLineEntity
@@ -11,6 +12,10 @@ import com.example.myapplication.data.v8.entity.SalesLineEntity
 @Dao
 interface SalesDao {
     @Insert suspend fun insertInvoice(invoice: SalesInvoiceEntity): Long
+
+    /** إدراج لا يرمي استثناء عند تعارض فريد متوقع؛ يعيد -1 عند تجاهل الإدراج. */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun tryInsertInvoice(invoice: SalesInvoiceEntity): Long
     @Insert suspend fun insertLine(line: SalesLineEntity): Long
     @Insert suspend fun insertAllocation(allocation: SaleAllocationEntity): Long
 
@@ -20,6 +25,9 @@ interface SalesDao {
     /** لمنع تكرار التأكيد عند النقر المزدوج/إعادة المحاولة. */
     @Query("SELECT * FROM sales_invoices WHERE cartUuid = :uuid LIMIT 1")
     suspend fun findByCartUuid(uuid: String): SalesInvoiceEntity?
+
+    @Query("SELECT * FROM sales_invoices WHERE displayNo = :displayNo LIMIT 1")
+    suspend fun findByDisplayNo(displayNo: String): SalesInvoiceEntity?
 
     @Query("SELECT * FROM sales_lines WHERE saleId = :saleId ORDER BY lineId")
     suspend fun linesFor(saleId: Long): List<SalesLineEntity>
@@ -49,9 +57,9 @@ interface SalesDao {
     )
     suspend fun markCancelled(saleId: Long, cancelledAt: Long, cancelReason: String?): Int
 
-    // ---- العدّاد الشهري: يُستدعى كله داخل معاملة التأكيد ----
+    // ---- العدّاد الشهري: يجب استدعاؤه داخل معاملة إنشاء الفاتورة ----
     @Insert(onConflict = OnConflictStrategy.IGNORE)
-    suspend fun ensureCounter(counter: com.example.myapplication.data.v8.entity.InvoiceCounterEntity): Long
+    suspend fun ensureCounter(counter: InvoiceCounterEntity): Long
 
     @Query("UPDATE invoice_counters SET lastNumber = lastNumber + 1 WHERE yearMonth = :yearMonth AND lastNumber < 999999")
     suspend fun bumpCounter(yearMonth: Int): Int

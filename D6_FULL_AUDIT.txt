@@ -1,0 +1,253 @@
+========== D6 FULL AUDIT ==========
+n========== ERROR TOKENS IN DATABASE ==========
+61: const val DATABASE_NAME = "pharmacy_v8.db"
+72: DATABASE_NAME
+80: BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_MOVEMENT_IMMUTABLE'); END""",
+82: BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_MOVEMENT_IMMUTABLE'); END""",
+85: """CREATE TRIGGER trg_batches_no_negative_ins BEFORE INSERT ON batches
+87: BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_NEGATIVE_BATCH_BALANCE'); END""",
+88: """CREATE TRIGGER trg_batches_no_negative_upd BEFORE UPDATE ON batches
+90: BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_NEGATIVE_BATCH_BALANCE'); END""",
+92: BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_RECORD_DELETE_NOT_ALLOWED'); END""",
+96: BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_RECORD_DELETE_NOT_ALLOWED'); END""",
+98: BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_RECORD_DELETE_NOT_ALLOWED'); END""",
+99: """CREATE TRIGGER trg_sale_alloc_no_delete BEFORE DELETE ON sale_allocations
+100: BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_RECORD_DELETE_NOT_ALLOWED'); END""",
+103: """CREATE TRIGGER trg_purchase_inv_delete_draft_only BEFORE DELETE ON purchase_invoices
+105: BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_PURCHASE_DELETE_NOT_ALLOWED'); END""",
+106: """CREATE TRIGGER trg_purchase_lines_delete_draft_only BEFORE DELETE ON purchase_lines
+107: WHEN (SELECT status FROM purchase_invoices WHERE purchaseId = OLD.purchaseId) <> 'DRAFT'
+108: BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_PURCHASE_LINE_DELETE_NOT_ALLOWED'); END""",
+114: BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_INVALID_STRIPS_PER_BOX'); END""",
+118: BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_INVALID_STRIPS_PER_BOX'); END""",
+129: BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_ITEM_FACTOR_LOCKED_BY_STOCK'); END""",
+132: """CREATE TRIGGER trg_purchase_lines_base_factor_insert
+133: BEFORE INSERT ON purchase_lines
+136: BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_PURCHASE_LINE_FACTOR_MISMATCH'); END""",
+137: """CREATE TRIGGER trg_sales_lines_base_factor_insert
+150: BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_SALE_LINE_BASE_QTY_MISMATCH'); END""",
+151: """CREATE TRIGGER trg_purchase_lines_factor_immutable
+152: BEFORE UPDATE OF baseUnitsPerBox, itemId ON purchase_lines
+154: BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_PURCHASE_LINE_IMMUTABLE'); END""",
+162: BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_SALE_LINE_SNAPSHOT_IMMUTABLE'); END""",
+165: """CREATE TRIGGER trg_batches_source_v1
+168: BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_BATCH_SOURCE_NOT_SUPPORTED'); END""",
+190: BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_OPENING_MOVEMENT_INVALID'); END""",
+193: """CREATE TRIGGER trg_movement_type_v1
+195: WHEN NEW.type NOT IN ('OPENING', 'PURCHASE', 'SALE', 'SALE_CANCEL')
+196: BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_MOVEMENT_TYPE_NOT_SUPPORTED'); END""",
+199: """CREATE TRIGGER trg_batches_base_factor_insert
+204: SELECT 1 FROM purchase_lines p
+224: BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_BATCH_FACTOR_MISMATCH'); END""",
+228: BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_BATCH_FACTOR_IMMUTABLE'); END""",
+231: """CREATE TRIGGER trg_item_changes_validate_insert
+240: BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_INVALID_ITEM_CHANGE'); END""",
+242: BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_ITEM_CHANGE_IMMUTABLE'); END""",
+244: BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_ITEM_CHANGE_IMMUTABLE'); END""",
+245: """CREATE TRIGGER trg_items_no_delete_after_change BEFORE DELETE ON items
+247: BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_ITEM_DELETE_NOT_ALLOWED'); END"""
+271: db.query("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND name NOT LIKE 'sqlite_%'").use { cursor ->
+297: db.query("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND name NOT LIKE 'sqlite_%'").use { cursor ->
+323: """SELECT COUNT(*) FROM purchase_lines
+334: LEFT JOIN purchase_lines p ON p.lineId = b.purchaseLineId
+351: WHERE m.type NOT IN ('OPENING', 'PURCHASE', 'SALE', 'SALE_CANCEL')
+n========== D6 ERROR DEFINITIONS ==========
+n--- C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\androidTest\java\com\example\myapplication\data\v8\V8DatabaseErrorParserTest.kt ---
+package com.example.myapplication.data.v8
+
+import android.content.Context
+import android.database.sqlite.SQLiteConstraintException
+import androidx.room.Room
+import androidx.test.core.app.ApplicationProvider
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.example.myapplication.data.v8.db.PharmacyDatabaseV8
+import com.example.myapplication.data.v8.error.SaleError
+import com.example.myapplication.data.v8.error.V8DatabaseErrorParser
+import com.example.myapplication.data.v8.error.V8ErrorCode
+import kotlinx.coroutines.CancellationException
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+
+@RunWith(AndroidJUnit4::class)
+class V8DatabaseErrorParserTest {
+    private lateinit var database: PharmacyDatabaseV8
+
+    @Before
+    fun setUp() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, PharmacyDatabaseV8::class.java)
+            .addCallback(PharmacyDatabaseV8.TRIGGERS_CALLBACK)
+            .build()
+    }
+
+    @After
+    fun tearDown() = database.close()
+
+    @Test
+    fun parsesActualAndroidSqliteTriggerExceptionAndPreservesRawMessage() {
+        val sql = database.openHelper.writableDatabase
+        sql.execSQL("CREATE TABLE d6_error_probe (id INTEGER PRIMARY KEY)")
+        sql.execSQL("""CREATE TRIGGER d6_error_probe_trigger BEFORE INSERT ON d6_error_probe
+            BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_INSUFFICIENT_STOCK'); END""")
+
+        val thrown = try {
+            sql.execSQL("INSERT INTO d6_error_probe(id) VALUES (1)")
+            throw AssertionError("Expected SQLite trigger constraint")
+        } catch (e: SQLiteConstraintException) {
+            e
+        }
+
+        val parsed = V8DatabaseErrorParser.parse(thrown)
+        assertTrue(parsed is SaleError.Known)
+        parsed as SaleError.Known
+        assertEquals(V8ErrorCode.INSUFFICIENT_STOCK, parsed.code)
+        assertTrue(parsed.rawMessage.contains("PHARMACY_V8:E_INSUFFICIENT_STOCK"))
+        assertSame(thrown, parsed.cause)
+    }
+
+    @Test
+    fun unknownSqliteMessageIsNotGuessed() {
+        val thrown = SQLiteConstraintException("constraint failed: unrelated message")
+        val parsed = V8DatabaseErrorParser.parse(thrown)
+        assertTrue(parsed is SaleError.Unknown)
+        assertTrue((parsed as SaleError.Unknown).rawMessage.contains("unrelated message"))
+    }
+
+    @Test(expected = CancellationException::class)
+    fun cancellationIsNeverConvertedToSaleError() {
+        V8DatabaseErrorParser.parse(CancellationException("cancelled"))
+    }
+}
+n--- C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\main\java\com\example\myapplication\data\v8\error\SaleError.kt ---
+package com.example.myapplication.data.v8.error
+
+/** Stable error vocabulary shared by V8 database triggers and Kotlin services. */
+enum class V8ErrorCode(val token: String) {
+    INSUFFICIENT_STOCK("E_INSUFFICIENT_STOCK"),
+    BATCH_OVERFLOW("E_BATCH_OVERFLOW"),
+    NEGATIVE_BATCH_BALANCE("E_NEGATIVE_BATCH_BALANCE"),
+    COST_OUT_OF_RANGE("E_COST_OUT_OF_RANGE"),
+    ZERO_QTY_WITH_COST("E_ZERO_QTY_WITH_COST"),
+    BATCH_SOURCE_NOT_SUPPORTED("E_BATCH_SOURCE_NOT_SUPPORTED"),
+    BATCH_FACTOR_MISMATCH("E_BATCH_FACTOR_MISMATCH"),
+    BATCH_FACTOR_IMMUTABLE("E_BATCH_FACTOR_IMMUTABLE"),
+    SALE_NOT_FOUND("E_SALE_NOT_FOUND"),
+    SALE_NOT_PENDING("E_SALE_NOT_PENDING"),
+    SALE_NOT_CONFIRMED("E_SALE_NOT_CONFIRMED"),
+    SALE_ALREADY_CANCELLED("E_SALE_ALREADY_CANCELLED"),
+    SALE_LINE_BASE_QTY_MISMATCH("E_SALE_LINE_BASE_QTY_MISMATCH"),
+    SALE_LINE_SNAPSHOT_IMMUTABLE("E_SALE_LINE_SNAPSHOT_IMMUTABLE"),
+    SALE_REVERSAL_MISMATCH("E_SALE_REVERSAL_MISMATCH"),
+    SALE_REVERSAL_ALREADY_EXISTS("E_SALE_REVERSAL_ALREADY_EXISTS"),
+    SALE_RECONCILIATION_FAILED("E_SALE_RECONCILIATION_FAILED"),
+    PURCHASE_LINE_FACTOR_MISMATCH("E_PURCHASE_LINE_FACTOR_MISMATCH"),
+    PURCHASE_LINE_IMMUTABLE("E_PURCHASE_LINE_IMMUTABLE"),
+    ITEM_FACTOR_LOCKED_BY_STOCK("E_ITEM_FACTOR_LOCKED_BY_STOCK"),
+    INVALID_ITEM_CHANGE("E_INVALID_ITEM_CHANGE"),
+    ITEM_CHANGE_IMMUTABLE("E_ITEM_CHANGE_IMMUTABLE"),
+    MOVEMENT_TYPE_NOT_SUPPORTED("E_MOVEMENT_TYPE_NOT_SUPPORTED"),
+    OPENING_MOVEMENT_INVALID("E_OPENING_MOVEMENT_INVALID"),
+    MOVEMENT_IMMUTABLE("E_MOVEMENT_IMMUTABLE"),
+    RECORD_DELETE_NOT_ALLOWED("E_RECORD_DELETE_NOT_ALLOWED"),
+    PURCHASE_DELETE_NOT_ALLOWED("E_PURCHASE_DELETE_NOT_ALLOWED"),
+    PURCHASE_LINE_DELETE_NOT_ALLOWED("E_PURCHASE_LINE_DELETE_NOT_ALLOWED"),
+    INVALID_STRIPS_PER_BOX("E_INVALID_STRIPS_PER_BOX"),
+    ITEM_DELETE_NOT_ALLOWED("E_ITEM_DELETE_NOT_ALLOWED"),
+    DATABASE_READ_ONLY("E_DATABASE_READ_ONLY"),
+    DATABASE_INTEGRITY_FAILED("E_DATABASE_INTEGRITY_FAILED"),
+    FOREIGN_KEY_VIOLATION("E_FOREIGN_KEY_VIOLATION"),
+    TRIGGER_REPAIR_FAILED("E_TRIGGER_REPAIR_FAILED");
+
+    companion object {
+        private val byToken = entries.associateBy(V8ErrorCode::token)
+        fun fromToken(token: String): V8ErrorCode? = byToken[token]
+    }
+}
+
+sealed interface SaleError {
+    data class Known(
+        val code: V8ErrorCode,
+        val rawMessage: String,
+        val cause: Throwable?
+    ) : SaleError
+
+    data class Unknown(
+        val rawMessage: String,
+        val cause: Throwable?
+    ) : SaleError
+}
+n--- C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\main\java\com\example\myapplication\data\v8\error\V8DatabaseErrorParser.kt ---
+package com.example.myapplication.data.v8.error
+
+import kotlinx.coroutines.CancellationException
+
+/** Parses only the explicit PHARMACY_V8 token; it never guesses from localized text. */
+object V8DatabaseErrorParser {
+    private val tokenRegex = Regex("(?:^|[^A-Z0-9_])PHARMACY_V8:(E_[A-Z0-9_]+)(?:$|[^A-Z0-9_])")
+
+    fun parse(throwable: Throwable): SaleError {
+        val chain = generateSequence(throwable) { it.cause }.toList()
+        chain.filterIsInstance<CancellationException>().firstOrNull()?.let { throw it }
+        val rawMessage = chain.mapNotNull { it.message }.joinToString(" | ")
+            .ifBlank { throwable::class.qualifiedName ?: "Unknown throwable" }
+
+        val token = chain.asSequence()
+            .mapNotNull { it.message }
+            .mapNotNull { message -> tokenRegex.find(message)?.groupValues?.get(1) }
+            .firstOrNull()
+
+        val code = token?.let(V8ErrorCode::fromToken)
+        return if (code != null) {
+            SaleError.Known(code = code, rawMessage = rawMessage, cause = throwable)
+        } else {
+            SaleError.Unknown(rawMessage = rawMessage, cause = throwable)
+        }
+    }
+}
+n========== PARSER AND ERROR USAGES ==========
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\androidTest\java\com\example\myapplication\data\v8\V8DatabaseErrorParserTest.kt:9: import com.example.myapplication.data.v8.error.SaleError
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\androidTest\java\com\example\myapplication\data\v8\V8DatabaseErrorParserTest.kt:10: import com.example.myapplication.data.v8.error.V8DatabaseErrorParser
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\androidTest\java\com\example\myapplication\data\v8\V8DatabaseErrorParserTest.kt:11: import com.example.myapplication.data.v8.error.V8ErrorCode
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\androidTest\java\com\example\myapplication\data\v8\V8DatabaseErrorParserTest.kt:22: class V8DatabaseErrorParserTest {
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\androidTest\java\com\example\myapplication\data\v8\V8DatabaseErrorParserTest.kt:50: val parsed = V8DatabaseErrorParser.parse(thrown)
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\androidTest\java\com\example\myapplication\data\v8\V8DatabaseErrorParserTest.kt:51: assertTrue(parsed is SaleError.Known)
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\androidTest\java\com\example\myapplication\data\v8\V8DatabaseErrorParserTest.kt:52: parsed as SaleError.Known
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\androidTest\java\com\example\myapplication\data\v8\V8DatabaseErrorParserTest.kt:53: assertEquals(V8ErrorCode.INSUFFICIENT_STOCK, parsed.code)
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\androidTest\java\com\example\myapplication\data\v8\V8DatabaseErrorParserTest.kt:61: val parsed = V8DatabaseErrorParser.parse(thrown)
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\androidTest\java\com\example\myapplication\data\v8\V8DatabaseErrorParserTest.kt:62: assertTrue(parsed is SaleError.Unknown)
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\androidTest\java\com\example\myapplication\data\v8\V8DatabaseErrorParserTest.kt:63: assertTrue((parsed as SaleError.Unknown).rawMessage.contains("unrelated message"))
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\androidTest\java\com\example\myapplication\data\v8\V8DatabaseErrorParserTest.kt:67: fun cancellationIsNeverConvertedToSaleError() {
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\androidTest\java\com\example\myapplication\data\v8\V8DatabaseErrorParserTest.kt:68: V8DatabaseErrorParser.parse(CancellationException("cancelled"))
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\main\java\com\example\myapplication\data\v8\error\SaleError.kt:4: enum class V8ErrorCode(val token: String) {
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\main\java\com\example\myapplication\data\v8\error\SaleError.kt:35: DATABASE_READ_ONLY("E_DATABASE_READ_ONLY"),
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\main\java\com\example\myapplication\data\v8\error\SaleError.kt:41: private val byToken = entries.associateBy(V8ErrorCode::token)
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\main\java\com\example\myapplication\data\v8\error\SaleError.kt:42: fun fromToken(token: String): V8ErrorCode? = byToken[token]
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\main\java\com\example\myapplication\data\v8\error\SaleError.kt:46: sealed interface SaleError {
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\main\java\com\example\myapplication\data\v8\error\SaleError.kt:48: val code: V8ErrorCode,
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\main\java\com\example\myapplication\data\v8\error\SaleError.kt:51: ) : SaleError
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\main\java\com\example\myapplication\data\v8\error\SaleError.kt:56: ) : SaleError
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\main\java\com\example\myapplication\data\v8\error\V8DatabaseErrorParser.kt:6: object V8DatabaseErrorParser {
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\main\java\com\example\myapplication\data\v8\error\V8DatabaseErrorParser.kt:9: fun parse(throwable: Throwable): SaleError {
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\main\java\com\example\myapplication\data\v8\error\V8DatabaseErrorParser.kt:20: val code = token?.let(V8ErrorCode::fromToken)
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\main\java\com\example\myapplication\data\v8\error\V8DatabaseErrorParser.kt:22: SaleError.Known(code = code, rawMessage = rawMessage, cause = throwable)
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\main\java\com\example\myapplication\data\v8\error\V8DatabaseErrorParser.kt:24: SaleError.Unknown(rawMessage = rawMessage, cause = throwable)
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\main\java\com\example\myapplication\ui\components\DatePickerFiled.kt:32: readOnly = true,
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\main\java\screens\InventoryScreen.kt:472: readOnly = true,
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\main\java\screens\ShortagesScreen.kt:131: readOnly = true,
+n========== V8 TEST FILES ==========
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\androidTest\java\com\example\myapplication\ExampleInstrumentedTest.kt
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\androidTest\java\com\example\myapplication\data\local\DatabaseMigrationTest.kt
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\androidTest\java\com\example\myapplication\data\v8\ItemD2IntegrityTest.kt
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\androidTest\java\com\example\myapplication\data\v8\V8DatabaseErrorParserTest.kt
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\test\java\com\example\myapplication\DatabaseTestHelper.kt
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\test\java\com\example\myapplication\ExampleUnitTest.kt
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\test\java\com\example\myapplication\core\ClockGuardTest.kt
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\test\java\com\example\myapplication\core\MoneyTest.kt
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\test\java\com\example\myapplication\domain\sales\SalePricingCalculatorTest.kt
+C:\Users\AL-Ameen\AndroidStudioProjects\MyApplication2-fix-releas-hardening\app\src\test\java\com\example\myapplication\utils\ExpiryDatePolicyTest.kt
+n========== END ==========
