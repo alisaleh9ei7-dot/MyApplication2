@@ -114,6 +114,7 @@ abstract class PharmacyDatabaseV8 : RoomDatabase() {
                       OLD.confirmedAt IS NULL
                       OR NEW.confirmedAt IS NOT OLD.confirmedAt
                       OR NEW.cancelledAt IS NULL
+                      OR NEW.cancelledAt < OLD.confirmedAt
                       OR NOT EXISTS(
                           SELECT 1 FROM stock_movements s
                           WHERE s.saleId = OLD.saleId AND s.type = 'SALE'

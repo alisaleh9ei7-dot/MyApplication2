@@ -366,6 +366,52 @@ class SaleServiceTest {
     }
 
     @Test
+    fun databaseRejectsCancellationTimestampEarlierThanConfirmation() = runBlocking {
+        val itemId = addItem()
+        addOpeningBatch(itemId, qty = 5L, cost = 500L)
+        val saleId = addInvoiceAndLine(
+            number = 37, itemId = itemId, qty = 2L,
+            unitPrice = 50L, lineDiscount = 0L, lineTotal = 100L
+        )
+        assertEquals(SaleConfirmationResult.Confirmed(saleId, 1), service.confirmPendingSale(saleId))
+
+        // سجّل عكساً صحيحاً بينما الفاتورة ما زالت مؤكدة؛ بذلك نعزل اختبار التوقيت.
+        val original = database.stockMovementDao().forSaleId(saleId)
+            .single { it.type == MovementType.SALE }
+        database.stockMovementDao().insert(
+            StockMovementEntity(
+                movementDate = now + 1L,
+                type = MovementType.SALE_CANCEL,
+                batchId = original.batchId,
+                itemId = original.itemId,
+                qtyDelta = -original.qtyDelta,
+                costDelta = -original.costDelta,
+                invoiceRef = original.invoiceRef,
+                saleId = original.saleId,
+                allocId = null,
+                reversesMovementId = original.movementId,
+                reason = null
+            )
+        )
+
+        var rejected = false
+        try {
+            database.openHelper.writableDatabase.execSQL(
+                "UPDATE sales_invoices SET status = 'CANCELLED', cancelledAt = ?, cancelReason = NULL WHERE saleId = ?",
+                arrayOf<Any?>(now - 1L, saleId)
+            )
+        } catch (_: SQLiteConstraintException) {
+            rejected = true
+        }
+
+        assertTrue("SQLite must reject cancelledAt earlier than confirmedAt", rejected)
+        val invoice = database.salesDao().getInvoice(saleId)
+        assertEquals(SaleStatus.CONFIRMED, invoice?.status)
+        assertEquals(now, invoice?.confirmedAt)
+        assertEquals(null, invoice?.cancelledAt)
+    }
+
+    @Test
     fun cancellationAcceptsZeroCostInverseMovement() = runBlocking {
         val itemId = addItem()
         val batchId = addOpeningBatch(itemId, qty = 5L, cost = 0L)
