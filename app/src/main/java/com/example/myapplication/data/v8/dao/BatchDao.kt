@@ -34,10 +34,18 @@ interface BatchDao {
     )
     suspend fun deductIfAvailable(batchId: Long, qty: Long, costOut: Long): Int
 
-    /** إعادة كمية وتكلفة لدفعة (إلغاء بيع في اليوم نفسه). */
+    /**
+     * استعادة مشروطة أثناء إلغاء البيع. تمنع overflow قبل تنفيذ الجمع،
+     * وتعيد 0 إذا كانت الدفعة غير موجودة أو كانت القيم غير صالحة.
+     */
     @Query(
-        """UPDATE batches SET qtyRemaining = qtyRemaining + :qty, costRemaining = costRemaining + :costBack
-           WHERE batchId = :batchId"""
+        """UPDATE batches
+           SET qtyRemaining = qtyRemaining + :qty,
+               costRemaining = costRemaining + :costBack
+           WHERE batchId = :batchId
+             AND :qty > 0 AND :costBack >= 0
+             AND qtyRemaining <= 9223372036854775807 - :qty
+             AND costRemaining <= 9223372036854775807 - :costBack"""
     )
     suspend fun restore(batchId: Long, qty: Long, costBack: Long): Int
 

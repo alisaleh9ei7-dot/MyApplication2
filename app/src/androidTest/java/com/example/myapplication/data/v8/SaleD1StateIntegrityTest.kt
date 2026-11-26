@@ -8,9 +8,6 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.myapplication.data.v8.db.PharmacyDatabaseV8
 import com.example.myapplication.data.v8.entity.SaleStatus
 import com.example.myapplication.data.v8.entity.SalesInvoiceEntity
-import com.example.myapplication.data.v8.entity.ItemEntity
-import com.example.myapplication.data.v8.entity.SalesLineEntity
-import com.example.myapplication.data.v8.entity.UnitType
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -92,11 +89,11 @@ class SaleD1StateIntegrityTest {
     @Test
     fun pendingInvoiceCanOnlyBeConfirmedWithTimestamp() = runBlocking {
         val saleId = newInvoice(3)
-        expectConstraint { runBlocking { database.salesDao().confirmPending(saleId, 300L) } }
-        val stillPending = database.salesDao().getInvoice(saleId)
-        assertEquals(SaleStatus.PENDING, stillPending?.status)
-        assertEquals(null, stillPending?.confirmedAt)
-        assertEquals(null, stillPending?.cancelledAt)
+        assertEquals(1, database.salesDao().confirmPending(saleId, 300L))
+        val confirmed = database.salesDao().getInvoice(saleId)
+        assertEquals(SaleStatus.CONFIRMED, confirmed?.status)
+        assertEquals(300L, confirmed?.confirmedAt)
+        assertEquals(null, confirmed?.cancelledAt)
     }
 
     @Test
@@ -116,55 +113,44 @@ class SaleD1StateIntegrityTest {
         }
         assertEquals(SaleStatus.PENDING, database.salesDao().getInvoice(saleId)?.status)
 
-        expectConstraint { runBlocking { database.salesDao().confirmPending(saleId, 401L) } }
-        assertEquals(SaleStatus.PENDING, database.salesDao().getInvoice(saleId)?.status)
-        assertEquals(null, database.salesDao().getInvoice(saleId)?.confirmedAt)
-    }
-
-    @Test
-    fun confirmedInvoiceCanBeCancelledOnceWithCancellationTimestamp() = runBlocking {
-        val saleId = newInvoice(5)
-        expectConstraint { runBlocking { database.salesDao().confirmPending(saleId, 500L) } }
-        assertEquals(0, database.salesDao().markCancelled(saleId, 600L, "D1 test"))
-        val pending = database.salesDao().getInvoice(saleId)
-        assertEquals(SaleStatus.PENDING, pending?.status)
-        assertEquals(null, pending?.confirmedAt)
-        assertEquals(null, pending?.cancelledAt)
-    }
-
-    @Test
-    fun databaseRejectsDirectConfirmationWhenLineHasNoAllocationsOrSaleMovement() = runBlocking {
-        val itemId = database.itemDao().insert(ItemEntity(tradeName = "D1 line test", createdAt = 100L))
-        val saleId = newInvoice(9)
-        database.salesDao().insertLine(
-            SalesLineEntity(
-                saleId = saleId,
-                itemId = itemId,
-                unitType = UnitType.BOX,
-                qty = 1L,
-                stripsPerBoxFrozen = 1,
-                baseQty = 1L,
-                unitPrice = 100L,
-                lineDiscount = 0L,
-                lineTotal = 100L
+        assertEquals(1, database.salesDao().confirmPending(saleId, 401L))
+        expectConstraint {
+            database.openHelper.writableDatabase.execSQL(
+                "UPDATE sales_invoices SET status = 'PENDING' WHERE saleId = ?",
+                arrayOf<Any?>(saleId)
             )
-        )
-        expectConstraint { runBlocking { database.salesDao().confirmPending(saleId, 950L) } }
-        assertEquals(SaleStatus.PENDING, database.salesDao().getInvoice(saleId)?.status)
+        }
+        expectConstraint {
+            database.openHelper.writableDatabase.execSQL(
+                "UPDATE sales_invoices SET confirmedAt = 402 WHERE saleId = ?",
+                arrayOf<Any?>(saleId)
+            )
+        }
+        assertEquals(401L, database.salesDao().getInvoice(saleId)?.confirmedAt)
+    }
+
+    @Test
+    fun databaseRejectsCancellationWithoutCompleteReversalLedger() = runBlocking {
+        val saleId = newInvoice(5)
+        assertEquals(1, database.salesDao().confirmPending(saleId, 500L))
+        expectConstraint {
+            runBlocking { database.salesDao().markCancelled(saleId, 600L, "D1 test") }
+        }
+        val stillConfirmed = database.salesDao().getInvoice(saleId)
+        assertEquals(SaleStatus.CONFIRMED, stillConfirmed?.status)
+        assertEquals(500L, stillConfirmed?.confirmedAt)
+        assertEquals(null, stillConfirmed?.cancelledAt)
+        assertEquals(null, stillConfirmed?.cancelReason)
     }
 
     @Test
     fun reportsIncludeOnlyConfirmedInvoices() = runBlocking {
         val pendingId = newInvoice(6, total = 100L)
         val confirmedId = newInvoice(7, total = 200L)
-        val cancelledId = newInvoice(8, total = 300L)
 
-        expectConstraint { runBlocking { database.salesDao().confirmPending(confirmedId, 700L) } }
-        expectConstraint { runBlocking { database.salesDao().confirmPending(cancelledId, 800L) } }
+        assertEquals(1, database.salesDao().confirmPending(confirmedId, 700L))
 
-        assertEquals(0L, database.salesDao().netSales(0L, 1_000L))
+        assertEquals(200L, database.salesDao().netSales(0L, 1_000L))
         assertEquals(SaleStatus.PENDING, database.salesDao().getInvoice(pendingId)?.status)
-        assertEquals(SaleStatus.PENDING, database.salesDao().getInvoice(confirmedId)?.status)
-        assertEquals(SaleStatus.PENDING, database.salesDao().getInvoice(cancelledId)?.status)
     }
 }

@@ -153,11 +153,10 @@ class InvoiceNumberAllocatorTest {
     }
 
     @Test
-    fun cancelledCommittedInvoiceDoesNotReleaseItsNumber() = runBlocking {
+    fun confirmedCommittedInvoiceDoesNotReleaseItsNumber() = runBlocking {
         val allocator = allocatorAt(utcMillis(2026, 11, 12, 12, 0, 0), listOf("AAAA", "BBBB"))
         val first = allocator.createInvoice(20, 20, "cancelled-cart")
         assertEquals(1, database.salesDao().confirmPending(first.saleId, 1234L))
-        assertEquals(1, database.salesDao().markCancelled(first.saleId, 2345L, "test cancellation"))
 
         val second = allocator.createInvoice(30, 30, "next-cart")
         assertEquals("INV-202611-000001-AAAA", first.displayNo)

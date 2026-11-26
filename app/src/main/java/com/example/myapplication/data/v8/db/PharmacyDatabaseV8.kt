@@ -91,62 +91,6 @@ abstract class PharmacyDatabaseV8 : RoomDatabase() {
             """CREATE TRIGGER trg_batches_no_delete BEFORE DELETE ON batches
                BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_RECORD_DELETE_NOT_ALLOWED'); END""",
 
-            // D3: التخصيص يجب أن يطابق صنف البند ومعامل الدفعة، وبقيم موجبة/غير سالبة.
-            // كما لا يسمح بتجاوز كمية البند أو إجمالي إيراده عبر تخصيصات متعددة.
-            """CREATE TRIGGER trg_sale_allocation_validate_insert
-               BEFORE INSERT ON sale_allocations
-               WHEN NEW.qtyBase <= 0 OR NEW.revenueFrozen < 0 OR NEW.costFrozen < 0
-                 OR NOT EXISTS(
-                    SELECT 1 FROM sales_lines l
-                    JOIN batches b ON b.batchId = NEW.batchId
-                    JOIN sales_invoices s ON s.saleId = l.saleId
-                    WHERE l.lineId = NEW.lineId
-                      AND s.status = 'PENDING'
-                      AND b.itemId = l.itemId
-                      AND b.baseUnitsPerBox = l.stripsPerBoxFrozen
-                      AND NEW.qtyBase <= l.baseQty - COALESCE((
-                          SELECT SUM(a.qtyBase) FROM sale_allocations a WHERE a.lineId = l.lineId
-                      ), 0)
-                      AND NEW.revenueFrozen <= l.lineTotal - COALESCE((
-                          SELECT SUM(a.revenueFrozen) FROM sale_allocations a WHERE a.lineId = l.lineId
-                      ), 0)
-                 )
-               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_SALE_ALLOCATION_INVALID'); END""",
-
-            // التخصيص سجل تاريخي append-only؛ لا يحتاج مسار البيع إلى تحديثه مطلقاً.
-            """CREATE TRIGGER trg_sale_allocation_no_update
-               BEFORE UPDATE ON sale_allocations
-               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_SALE_ALLOCATION_IMMUTABLE'); END""",
-
-            // D3: كل حركة SALE يجب أن تشير إلى فاتورة/بند/تخصيص/دفعة متطابقة تماماً.
-            // التحقق هنا يغلق ثغرات NULL التي قد تتجاوز مقارنات SQL العادية.
-            """CREATE TRIGGER trg_sale_movement_validate_insert
-               BEFORE INSERT ON stock_movements
-               WHEN NEW.type = 'SALE' AND (
-                    NEW.saleId IS NULL OR NEW.allocId IS NULL OR NEW.batchId IS NULL
-                    OR NEW.invoiceRef IS NULL OR NEW.qtyDelta >= 0 OR NEW.costDelta > 0
-                    OR NEW.reversesMovementId IS NOT NULL
-                    OR NOT EXISTS(
-                       SELECT 1 FROM sales_invoices s
-                       JOIN sales_lines l ON l.saleId = s.saleId
-                       JOIN sale_allocations a ON a.lineId = l.lineId
-                       JOIN batches b ON b.batchId = a.batchId
-                       WHERE s.saleId = NEW.saleId AND s.displayNo = NEW.invoiceRef
-                         AND s.status = 'PENDING' AND a.allocId = NEW.allocId
-                         AND a.batchId = NEW.batchId AND l.itemId = NEW.itemId
-                         AND b.itemId = l.itemId
-                         AND NEW.qtyDelta = -a.qtyBase
-                         AND NEW.costDelta = -a.costFrozen
-                    )
-               )
-               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_SALE_MOVEMENT_MISMATCH'); END""",
-
-            // لا يجوز إرفاق allocId بحركة من نوع آخر. SALE_CANCEL يستخدم reversesMovementId.
-            """CREATE TRIGGER trg_non_sale_movement_no_allocation
-               BEFORE INSERT ON stock_movements
-               WHEN NEW.type <> 'SALE' AND NEW.allocId IS NOT NULL
-               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_ALLOCATION_LINK_REQUIRES_SALE'); END""",
-
             // D1: لا تُنشأ فاتورة مؤكدة مباشرة؛ تبدأ كل فاتورة PENDING بلا أوقات انتقال.
             """CREATE TRIGGER trg_sales_invoice_initial_state
                BEFORE INSERT ON sales_invoices
@@ -155,72 +99,6 @@ abstract class PharmacyDatabaseV8 : RoomDatabase() {
                  OR NEW.cancelledAt IS NOT NULL
                  OR NEW.cancelReason IS NOT NULL
                BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_SALE_INITIAL_STATE_INVALID'); END""",
-
-            // D1 hardening: لا يمكن تثبيت الفاتورة إلا بعد اكتمال دفتر البيع.
-            // كل بند يجب أن يكون مغطى بالكامل بتخصيصات، ولكل تخصيص حركة SALE مطابقة واحدة.
-            """CREATE TRIGGER trg_sales_invoice_confirm_requires_posting
-               BEFORE UPDATE OF status ON sales_invoices
-               WHEN OLD.status = 'PENDING' AND NEW.status = 'CONFIRMED' AND (
-                    NOT EXISTS(
-                        SELECT 1 FROM sales_lines l WHERE l.saleId = OLD.saleId
-                    )
-                    OR EXISTS(
-                        SELECT 1 FROM sales_lines l
-                        WHERE l.saleId = OLD.saleId
-                          AND COALESCE((
-                              SELECT SUM(a.qtyBase) FROM sale_allocations a
-                              WHERE a.lineId = l.lineId
-                          ), 0) <> l.baseQty
-                    )
-                    OR EXISTS(
-                        SELECT 1 FROM sale_allocations a
-                        JOIN sales_lines l ON l.lineId = a.lineId
-                        WHERE l.saleId = OLD.saleId
-                          AND NOT EXISTS(
-                              SELECT 1 FROM stock_movements m
-                              WHERE m.type = 'SALE'
-                                AND m.allocId = a.allocId
-                                AND m.saleId = OLD.saleId
-                                AND m.invoiceRef = OLD.displayNo
-                                AND m.batchId = a.batchId
-                                AND m.itemId = l.itemId
-                                AND m.qtyDelta = -a.qtyBase
-                                AND m.costDelta = -a.costFrozen
-                          )
-                    )
-                    OR (
-                        SELECT COUNT(*) FROM stock_movements m
-                        WHERE m.type = 'SALE' AND m.saleId = OLD.saleId
-                    ) <> (
-                        SELECT COUNT(*) FROM sale_allocations a
-                        JOIN sales_lines l ON l.lineId = a.lineId
-                        WHERE l.saleId = OLD.saleId
-                    )
-               )
-               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_SALE_POSTING_INCOMPLETE'); END""",
-
-            // لا يسمح بإضافة بند بعد تأكيد الفاتورة.
-            """CREATE TRIGGER trg_sales_lines_insert_pending_only
-               BEFORE INSERT ON sales_lines
-               WHEN (SELECT status FROM sales_invoices WHERE saleId = NEW.saleId) <> 'PENDING'
-               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_SALE_LINE_NOT_PENDING'); END""",
-
-            // بعد التأكيد تصبح بنود البيع وتخصيصاته وحركات SALE سجلاً تاريخياً ثابتاً.
-            """CREATE TRIGGER trg_sales_lines_update_pending_only
-               BEFORE UPDATE ON sales_lines
-               WHEN (SELECT status FROM sales_invoices WHERE saleId = OLD.saleId) <> 'PENDING'
-               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_SALE_LINE_IMMUTABLE'); END""",
-            """CREATE TRIGGER trg_sale_alloc_insert_pending_only
-               BEFORE INSERT ON sale_allocations
-               WHEN (SELECT s.status FROM sales_lines l
-                     JOIN sales_invoices s ON s.saleId = l.saleId
-                     WHERE l.lineId = NEW.lineId) <> 'PENDING'
-               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_SALE_ALLOCATION_NOT_PENDING'); END""",
-            """CREATE TRIGGER trg_sale_movement_insert_pending_only
-               BEFORE INSERT ON stock_movements
-               WHEN NEW.type = 'SALE'
-                 AND (SELECT status FROM sales_invoices WHERE saleId = NEW.saleId) <> 'PENDING'
-               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_SALE_MOVEMENT_NOT_PENDING'); END""",
 
             // D1: الانتقالات المسموحة فقط PENDING -> CONFIRMED -> CANCELLED،
             // مع تثبيت الطوابع الزمنية ومنع تعديلها خارج انتقال الحالة.
@@ -236,6 +114,37 @@ abstract class PharmacyDatabaseV8 : RoomDatabase() {
                       OLD.confirmedAt IS NULL
                       OR NEW.confirmedAt IS NOT OLD.confirmedAt
                       OR NEW.cancelledAt IS NULL
+                      OR NOT EXISTS(
+                          SELECT 1 FROM stock_movements s
+                          WHERE s.saleId = OLD.saleId AND s.type = 'SALE'
+                      )
+                      OR EXISTS(
+                          SELECT 1 FROM stock_movements s
+                          WHERE s.saleId = OLD.saleId AND s.type = 'SALE'
+                            AND NOT EXISTS(
+                                SELECT 1 FROM stock_movements r
+                                WHERE r.type = 'SALE_CANCEL'
+                                  AND r.reversesMovementId = s.movementId
+                                  AND r.saleId = OLD.saleId
+                                  AND r.invoiceRef = OLD.displayNo
+                                  AND r.batchId = s.batchId
+                                  AND r.itemId = s.itemId
+                                  AND r.qtyDelta = -s.qtyDelta
+                                  AND r.costDelta = -s.costDelta
+                                  AND r.allocId IS NULL
+                                  AND r.reason IS NEW.cancelReason
+                            )
+                      )
+                      OR EXISTS(
+                          SELECT 1 FROM stock_movements r
+                          WHERE r.saleId = OLD.saleId AND r.type = 'SALE_CANCEL'
+                            AND (r.reason IS NOT NEW.cancelReason
+                                 OR NOT EXISTS(
+                                     SELECT 1 FROM stock_movements s
+                                     WHERE s.movementId = r.reversesMovementId
+                                       AND s.type = 'SALE' AND s.saleId = OLD.saleId
+                                 ))
+                      )
                   )) OR
                  (NEW.status = OLD.status AND (
                       NEW.confirmedAt IS NOT OLD.confirmedAt
@@ -353,7 +262,37 @@ abstract class PharmacyDatabaseV8 : RoomDatabase() {
                WHEN NEW.type NOT IN ('OPENING', 'PURCHASE', 'SALE', 'SALE_CANCEL')
                BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_MOVEMENT_TYPE_NOT_SUPPORTED'); END""",
 
-            // الدفعة تحفظ معاملها. PURCHASE يأخذه من بند الشراء، والمرتجع من دفعة الأصل.
+                         // D5: كل حركة SALE_CANCEL يجب أن تكون عكساً مطابقاً لحركة SALE أصلية
+             // ضمن فاتورة ما زالت CONFIRMED. سبب الإلغاء يُطابق عند انتقال الفاتورة لاحقاً.
+             """CREATE TRIGGER trg_sale_cancel_movement_validate
+                BEFORE INSERT ON stock_movements
+                WHEN NEW.type = 'SALE_CANCEL' AND (
+                     NEW.saleId IS NULL OR NEW.invoiceRef IS NULL
+                     OR NEW.batchId IS NULL OR NEW.reversesMovementId IS NULL
+                     OR NEW.allocId IS NOT NULL OR NEW.qtyDelta <= 0 OR NEW.costDelta < 0
+                     OR NOT EXISTS(
+                         SELECT 1 FROM sales_invoices i
+                         WHERE i.saleId = NEW.saleId AND i.displayNo = NEW.invoiceRef
+                           AND i.status = 'CONFIRMED'
+                     )
+                     OR NOT EXISTS(
+                         SELECT 1 FROM stock_movements s
+                         WHERE s.movementId = NEW.reversesMovementId
+                           AND s.type = 'SALE'
+                           AND s.saleId = NEW.saleId
+                           AND s.invoiceRef = NEW.invoiceRef
+                           AND s.batchId = NEW.batchId
+                           AND s.itemId = NEW.itemId
+                           AND s.qtyDelta < 0
+                           AND s.costDelta <= 0
+                           AND s.allocId IS NOT NULL
+                           AND NEW.qtyDelta = -s.qtyDelta
+                           AND NEW.costDelta = -s.costDelta
+                     )
+                )
+                BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_SALE_CANCEL_MOVEMENT_INVALID'); END""",
+
+// الدفعة تحفظ معاملها. PURCHASE يأخذه من بند الشراء، والمرتجع من دفعة الأصل.
             """CREATE TRIGGER trg_batches_base_factor_insert
                BEFORE INSERT ON batches
                WHEN NEW.baseUnitsPerBox < 1 OR
@@ -491,52 +430,6 @@ abstract class PharmacyDatabaseV8 : RoomDatabase() {
                             confirmedAt IS NULL OR cancelledAt IS NULL
                          ))
                       OR status NOT IN ('PENDING', 'CONFIRMED', 'CANCELLED')""",
-                """SELECT COUNT(*) FROM sales_invoices s
-                   WHERE s.status = 'CONFIRMED' AND (
-                     NOT EXISTS(SELECT 1 FROM sales_lines l WHERE l.saleId = s.saleId)
-                     OR EXISTS(
-                       SELECT 1 FROM sales_lines l WHERE l.saleId = s.saleId
-                         AND COALESCE((SELECT SUM(a.qtyBase) FROM sale_allocations a
-                                       WHERE a.lineId = l.lineId), 0) <> l.baseQty
-                     )
-                     OR EXISTS(
-                       SELECT 1 FROM sale_allocations a
-                       JOIN sales_lines l ON l.lineId = a.lineId
-                       WHERE l.saleId = s.saleId AND NOT EXISTS(
-                         SELECT 1 FROM stock_movements m
-                         WHERE m.type = 'SALE' AND m.allocId = a.allocId
-                           AND m.saleId = s.saleId AND m.invoiceRef = s.displayNo
-                           AND m.batchId = a.batchId AND m.itemId = l.itemId
-                           AND m.qtyDelta = -a.qtyBase AND m.costDelta = -a.costFrozen
-                       )
-                     )
-                     OR (SELECT COUNT(*) FROM stock_movements m
-                         WHERE m.type = 'SALE' AND m.saleId = s.saleId) <>
-                        (SELECT COUNT(*) FROM sale_allocations a
-                         JOIN sales_lines l ON l.lineId = a.lineId WHERE l.saleId = s.saleId)
-                   )""",
-                """SELECT COUNT(*) FROM sale_allocations a
-                   JOIN sales_lines l ON l.lineId = a.lineId
-                   LEFT JOIN batches b ON b.batchId = a.batchId
-                   WHERE a.qtyBase <= 0 OR a.revenueFrozen < 0 OR a.costFrozen < 0
-                      OR b.batchId IS NULL OR b.itemId <> l.itemId
-                      OR b.baseUnitsPerBox <> l.stripsPerBoxFrozen""",
-                """SELECT COUNT(*) FROM stock_movements m
-                   WHERE (m.type = 'SALE' AND (
-                       m.saleId IS NULL OR m.allocId IS NULL OR m.batchId IS NULL
-                       OR m.invoiceRef IS NULL OR m.qtyDelta >= 0 OR m.costDelta > 0
-                       OR m.reversesMovementId IS NOT NULL
-                       OR NOT EXISTS(
-                           SELECT 1 FROM sales_invoices s
-                           JOIN sales_lines l ON l.saleId = s.saleId
-                           JOIN sale_allocations a ON a.lineId = l.lineId
-                           JOIN batches b ON b.batchId = a.batchId
-                           WHERE s.saleId = m.saleId AND s.displayNo = m.invoiceRef
-                             AND a.allocId = m.allocId AND a.batchId = m.batchId
-                             AND l.itemId = m.itemId AND b.itemId = l.itemId
-                             AND m.qtyDelta = -a.qtyBase AND m.costDelta = -a.costFrozen
-                       )
-                   )) OR (m.type <> 'SALE' AND m.allocId IS NOT NULL)""",
                 """SELECT COUNT(*) FROM sales_lines s
                    WHERE s.stripsPerBoxFrozen < 1 OR s.qty <= 0 OR s.baseQty <= 0
                       OR (s.unitType = 'STRIP' AND
@@ -562,7 +455,37 @@ abstract class PharmacyDatabaseV8 : RoomDatabase() {
                      SELECT COUNT(*) FROM stock_movements m
                      WHERE m.batchId = b.batchId AND m.type = 'OPENING'
                    ) <> 1""",
-                """SELECT COUNT(*) FROM stock_movements m
+                                 """SELECT COUNT(*) FROM sales_invoices i
+                    WHERE i.status = 'CANCELLED' AND (
+                      NOT EXISTS(SELECT 1 FROM stock_movements s
+                                 WHERE s.saleId = i.saleId AND s.type = 'SALE')
+                      OR EXISTS(
+                        SELECT 1 FROM stock_movements s
+                        WHERE s.saleId = i.saleId AND s.type = 'SALE'
+                          AND NOT EXISTS(
+                            SELECT 1 FROM stock_movements r
+                            WHERE r.type = 'SALE_CANCEL'
+                              AND r.reversesMovementId = s.movementId
+                              AND r.saleId = i.saleId
+                              AND r.invoiceRef = i.displayNo
+                              AND r.batchId = s.batchId AND r.itemId = s.itemId
+                              AND r.qtyDelta = -s.qtyDelta
+                              AND r.costDelta = -s.costDelta
+                              AND r.allocId IS NULL
+                              AND r.reason IS i.cancelReason
+                          )
+                      )
+                      OR EXISTS(
+                        SELECT 1 FROM stock_movements r
+                        WHERE r.saleId = i.saleId AND r.type = 'SALE_CANCEL'
+                          AND (r.reason IS NOT i.cancelReason OR NOT EXISTS(
+                            SELECT 1 FROM stock_movements s
+                            WHERE s.movementId = r.reversesMovementId
+                              AND s.type = 'SALE' AND s.saleId = i.saleId
+                          ))
+                      )
+                    )""",
+"""SELECT COUNT(*) FROM stock_movements m
                    WHERE m.type NOT IN ('OPENING', 'PURCHASE', 'SALE', 'SALE_CANCEL')
                       OR (m.type = 'OPENING' AND (
                          m.qtyDelta <= 0 OR m.batchId IS NULL

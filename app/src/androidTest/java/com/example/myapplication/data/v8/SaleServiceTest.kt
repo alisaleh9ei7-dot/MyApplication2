@@ -17,6 +17,8 @@ import com.example.myapplication.data.v8.entity.SalesLineEntity
 import com.example.myapplication.data.v8.entity.StockMovementEntity
 import com.example.myapplication.data.v8.entity.UnitType
 import com.example.myapplication.data.v8.service.SaleConfirmationResult
+import com.example.myapplication.data.v8.service.SaleCancellationResult
+import com.example.myapplication.data.v8.service.SaleCancellationService
 import com.example.myapplication.data.v8.service.SaleService
 import java.time.Instant
 import java.time.LocalDate
@@ -272,6 +274,116 @@ class SaleServiceTest {
         assertEquals(SaleStatus.PENDING, database.salesDao().getInvoice(saleId)?.status)
         assertTrue(database.salesDao().allocationsFor(saleId).isEmpty())
         assertEquals(5L, database.batchDao().getById(batchId)?.qtyRemaining)
+    }
+
+
+    @Test
+    fun cancellationRestoresBatchAndAppendsExactInverseMovement() = runBlocking {
+        val itemId = addItem()
+        val batchId = addOpeningBatch(itemId, qty = 10L, cost = 1_000L)
+        val saleId = addInvoiceAndLine(
+            number = 30, itemId = itemId, qty = 3L,
+            unitPrice = 100L, lineDiscount = 0L, lineTotal = 300L
+        )
+        assertEquals(SaleConfirmationResult.Confirmed(saleId, 1), service.confirmPendingSale(saleId))
+
+        val result = SaleCancellationService(
+            database, FixedAppClock(now + 5_000L, TimeZone.getTimeZone("UTC"))
+        ).cancelConfirmedSale(saleId, "Customer returned purchase")
+
+        assertEquals(SaleCancellationResult.Cancelled(saleId, 1), result)
+        val invoice = database.salesDao().getInvoice(saleId)
+        assertEquals(SaleStatus.CANCELLED, invoice?.status)
+        assertEquals(now, invoice?.confirmedAt)
+        assertEquals(now + 5_000L, invoice?.cancelledAt)
+        assertEquals("Customer returned purchase", invoice?.cancelReason)
+        assertEquals(10L, database.batchDao().getById(batchId)?.qtyRemaining)
+        assertEquals(1_000L, database.batchDao().getById(batchId)?.costRemaining)
+
+        val movements = database.stockMovementDao().forSaleId(saleId)
+        val sale = movements.single { it.type == MovementType.SALE }
+        val reversal = movements.single { it.type == MovementType.SALE_CANCEL }
+        assertEquals(sale.movementId, reversal.reversesMovementId)
+        assertEquals(sale.batchId, reversal.batchId)
+        assertEquals(sale.itemId, reversal.itemId)
+        assertEquals(-sale.qtyDelta, reversal.qtyDelta)
+        assertEquals(-sale.costDelta, reversal.costDelta)
+        assertEquals(sale.invoiceRef, reversal.invoiceRef)
+        assertEquals(sale.saleId, reversal.saleId)
+        assertEquals(null, reversal.allocId)
+        assertEquals("Customer returned purchase", reversal.reason)
+    }
+
+    @Test
+    fun cancellationOfPendingInvoiceIsRejectedWithoutMutation() = runBlocking {
+        val itemId = addItem()
+        val batchId = addOpeningBatch(itemId, qty = 5L, cost = 500L)
+        val saleId = addInvoiceAndLine(
+            number = 31, itemId = itemId, qty = 2L,
+            unitPrice = 50L, lineDiscount = 0L, lineTotal = 100L
+        )
+        val result = SaleCancellationService(database).cancelConfirmedSale(saleId)
+        assertEquals(SaleCancellationResult.NotConfirmed, result)
+        assertEquals(SaleStatus.PENDING, database.salesDao().getInvoice(saleId)?.status)
+        assertEquals(5L, database.batchDao().getById(batchId)?.qtyRemaining)
+        assertTrue(database.stockMovementDao().forSaleId(saleId).isEmpty())
+    }
+
+    @Test
+    fun failureDuringSecondReversalRollsBackAllRestoresAndReversalRows() = runBlocking {
+        val itemId = addItem()
+        val firstBatch = addOpeningBatch(
+            itemId, qty = 1L, cost = 100L,
+            expiryDate = today + 1, receivedAt = now - 2_000L
+        )
+        val secondBatch = addOpeningBatch(
+            itemId, qty = 3L, cost = 600L,
+            expiryDate = today + 2, receivedAt = now - 1_000L
+        )
+        val saleId = addInvoiceAndLine(
+            number = 32, itemId = itemId, qty = 3L,
+            unitPrice = 100L, lineDiscount = 0L, lineTotal = 300L
+        )
+        assertEquals(SaleConfirmationResult.Confirmed(saleId, 2), service.confirmPendingSale(saleId))
+        database.openHelper.writableDatabase.execSQL(
+            """CREATE TRIGGER test_abort_second_sale_reversal
+               BEFORE INSERT ON stock_movements
+               WHEN NEW.type = 'SALE_CANCEL' AND NEW.batchId = $secondBatch
+               BEGIN SELECT RAISE(ABORT, 'TEST:FORCED_SECOND_REVERSAL_FAILURE'); END"""
+        )
+
+        var failed = false
+        try {
+            SaleCancellationService(database).cancelConfirmedSale(saleId, "forced failure")
+        } catch (_: SQLiteConstraintException) {
+            failed = true
+        }
+        assertTrue("The injected constraint should abort cancellation", failed)
+        assertEquals(SaleStatus.CONFIRMED, database.salesDao().getInvoice(saleId)?.status)
+        assertEquals(0L, database.batchDao().getById(firstBatch)?.qtyRemaining)
+        assertEquals(1L, database.batchDao().getById(secondBatch)?.qtyRemaining)
+        assertEquals(0L, database.batchDao().getById(firstBatch)?.costRemaining)
+        assertEquals(200L, database.batchDao().getById(secondBatch)?.costRemaining)
+        val movements = database.stockMovementDao().forSaleId(saleId)
+        assertEquals(2, movements.count { it.type == MovementType.SALE })
+        assertEquals(0, movements.count { it.type == MovementType.SALE_CANCEL })
+    }
+
+    @Test
+    fun retryingCancellationDoesNotRestoreStockTwice() = runBlocking {
+        val itemId = addItem()
+        val batchId = addOpeningBatch(itemId, qty = 5L, cost = 500L)
+        val saleId = addInvoiceAndLine(
+            number = 33, itemId = itemId, qty = 2L,
+            unitPrice = 50L, lineDiscount = 0L, lineTotal = 100L
+        )
+        assertEquals(SaleConfirmationResult.Confirmed(saleId, 1), service.confirmPendingSale(saleId))
+        val cancellation = SaleCancellationService(database)
+        assertEquals(SaleCancellationResult.Cancelled(saleId, 1), cancellation.cancelConfirmedSale(saleId))
+        assertEquals(SaleCancellationResult.AlreadyCancelled, cancellation.cancelConfirmedSale(saleId))
+        assertEquals(5L, database.batchDao().getById(batchId)?.qtyRemaining)
+        assertEquals(500L, database.batchDao().getById(batchId)?.costRemaining)
+        assertEquals(1, database.stockMovementDao().forSaleId(saleId).count { it.type == MovementType.SALE_CANCEL })
     }
 
     private suspend fun addItem(
