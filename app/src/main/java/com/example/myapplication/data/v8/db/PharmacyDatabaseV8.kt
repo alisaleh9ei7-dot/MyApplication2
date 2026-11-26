@@ -229,6 +229,67 @@ abstract class PharmacyDatabaseV8 : RoomDatabase() {
                  OR NEW.itemId IS NOT OLD.itemId
                BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_SALE_LINE_SNAPSHOT_IMMUTABLE'); END""",
 
+            // D3: تخصيص البيع يجب أن يطابق الصنف ومعامل التحويل في بند البيع والدفعة،
+            // وأن تبقى مجاميع الكمية والإيراد ضمن حدود البند قبل التأكيد.
+            """CREATE TRIGGER trg_sale_alloc_validate_insert
+               BEFORE INSERT ON sale_allocations
+               WHEN NEW.qtyBase <= 0 OR NEW.revenueFrozen < 0 OR NEW.costFrozen < 0
+                 OR NOT EXISTS(
+                    SELECT 1
+                    FROM sales_lines l
+                    JOIN sales_invoices i ON i.saleId = l.saleId
+                    JOIN batches b ON b.batchId = NEW.batchId
+                    WHERE l.lineId = NEW.lineId
+                      AND i.status = 'PENDING'
+                      AND b.itemId = l.itemId
+                      AND b.baseUnitsPerBox = l.stripsPerBoxFrozen
+                 )
+                 OR NEW.qtyBase > COALESCE((
+                    SELECT l.baseQty - COALESCE((
+                        SELECT SUM(a.qtyBase) FROM sale_allocations a WHERE a.lineId = l.lineId
+                    ), 0)
+                    FROM sales_lines l WHERE l.lineId = NEW.lineId
+                 ), -1)
+                 OR NEW.revenueFrozen > COALESCE((
+                    SELECT l.lineTotal - COALESCE((
+                        SELECT SUM(a.revenueFrozen) FROM sale_allocations a WHERE a.lineId = l.lineId
+                    ), 0)
+                    FROM sales_lines l WHERE l.lineId = NEW.lineId
+                 ), -1)
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_SALE_ALLOCATION_INVALID'); END""",
+
+            // D3: التخصيصات دفتر تاريخي؛ لا تُعدّل بعد إنشائها.
+            """CREATE TRIGGER trg_sale_alloc_no_update BEFORE UPDATE ON sale_allocations
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_SALE_ALLOCATION_IMMUTABLE'); END""",
+
+            // D3: حركة SALE لا تُقبل إلا إذا طابقت الفاتورة والبند والتخصيص والدفعة
+            // والكمية والتكلفة المجمدتين. أي نوع آخر لا يحمل allocId.
+            """CREATE TRIGGER trg_sale_movement_validate_insert
+               BEFORE INSERT ON stock_movements
+               WHEN (NEW.type = 'SALE' AND (
+                    NEW.batchId IS NULL OR NEW.saleId IS NULL OR NEW.invoiceRef IS NULL
+                    OR NEW.allocId IS NULL OR NEW.qtyDelta >= 0 OR NEW.costDelta > 0
+                    OR NOT EXISTS(
+                        SELECT 1
+                        FROM sales_invoices i
+                        JOIN sales_lines l ON l.saleId = i.saleId
+                        JOIN sale_allocations a ON a.lineId = l.lineId
+                        JOIN batches b ON b.batchId = a.batchId
+                        WHERE i.saleId = NEW.saleId
+                          AND i.displayNo = NEW.invoiceRef
+                          AND i.status = 'PENDING'
+                          AND a.allocId = NEW.allocId
+                          AND a.lineId = l.lineId
+                          AND a.batchId = NEW.batchId
+                          AND l.itemId = NEW.itemId
+                          AND b.itemId = NEW.itemId
+                          AND NEW.qtyDelta = -a.qtyBase
+                          AND NEW.costDelta = -a.costFrozen
+                    )
+                 )) OR
+                 (NEW.type <> 'SALE' AND NEW.allocId IS NOT NULL)
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_SALE_MOVEMENT_INVALID'); END""",
+
             // D9: في الإصدار الأول مصادر الدفعات المدعومة هي PURCHASE وOPENING فقط.
             """CREATE TRIGGER trg_batches_source_v1
                BEFORE INSERT ON batches
