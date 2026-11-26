@@ -203,7 +203,7 @@ class SaleD3LedgerIntegrityTest {
         expectConstraint {
             runBlocking {
                 database.salesDao().insertAllocation(
-                    SaleAllocationEntity(f.lineId, f.batchId, 1L, 1L, 1L)
+                    SaleAllocationEntity(lineId = f.lineId, batchId = f.batchId, qtyBase = 1L, revenueFrozen = 1L, costFrozen = 1L)
                 )
             }
         }
