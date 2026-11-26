@@ -185,7 +185,7 @@ abstract class PharmacyDatabaseV8 : RoomDatabase() {
                WHEN NEW.stripsPerBox IS NOT NULL AND NEW.stripsPerBox < 2
                BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_INVALID_STRIPS_PER_BOX'); END""",
 
-            // D2: التغيير مسموح مع التاريخ إذا كان رصيد كل دفعات الصنف صفراً.
+            // D2: معامل التحويل يُقفل عند وجود رصيد غير صفري في أي دفعة (LOCKED_BY_STOCK).
             // ItemDao يكرر الشرط في UPDATE، وهذا Trigger هو خط الدفاع الأخير.
             """CREATE TRIGGER trg_items_strips_per_box_lock
                BEFORE UPDATE OF stripsPerBox ON items
@@ -195,6 +195,24 @@ abstract class PharmacyDatabaseV8 : RoomDatabase() {
                     WHERE itemId = OLD.itemId AND qtyRemaining <> 0
                 )
                BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_ITEM_FACTOR_LOCKED_BY_STOCK'); END""",
+
+            // D2: بعد وجود أي دفعة أو بند شراء أو بند بيع أو حركة مخزون يصبح المعامل ثابتاً
+            // نهائياً حتى لو كان الرصيد صفراً (LOCKED_BY_HISTORY). شرط "لا رصيد غير صفري" هنا
+            // يجعله حصرياً مع Trigger المخزون أعلاه، فتكون رسالة الخطأ حتمية.
+            """CREATE TRIGGER trg_items_strips_per_box_history_lock
+               BEFORE UPDATE OF stripsPerBox ON items
+               WHEN OLD.stripsPerBox IS NOT NEW.stripsPerBox
+                AND NOT EXISTS(
+                    SELECT 1 FROM batches
+                    WHERE itemId = OLD.itemId AND qtyRemaining <> 0
+                )
+                AND (
+                    EXISTS(SELECT 1 FROM batches WHERE itemId = OLD.itemId)
+                    OR EXISTS(SELECT 1 FROM purchase_lines WHERE itemId = OLD.itemId)
+                    OR EXISTS(SELECT 1 FROM sales_lines WHERE itemId = OLD.itemId)
+                    OR EXISTS(SELECT 1 FROM stock_movements WHERE itemId = OLD.itemId)
+                )
+               BEGIN SELECT RAISE(ABORT, 'PHARMACY_V8:E_ITEM_FACTOR_LOCKED_BY_HISTORY'); END""",
 
             // D2-B: تثبيت معامل التحويل عند إنشاء بنود الشراء والبيع.
             """CREATE TRIGGER trg_purchase_lines_base_factor_insert

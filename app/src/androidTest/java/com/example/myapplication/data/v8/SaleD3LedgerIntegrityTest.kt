@@ -266,6 +266,64 @@ class SaleD3LedgerIntegrityTest {
                 )
             }
         }
+        // Cost must equal the frozen allocation cost.
+        expectConstraint {
+            runBlocking {
+                database.stockMovementDao().insert(
+                    StockMovementEntity(
+                        movementDate = 302L,
+                        type = MovementType.SALE,
+                        batchId = f.batchId,
+                        itemId = f.itemId,
+                        qtyDelta = -10L,
+                        costDelta = -999L,
+                        invoiceRef = f.displayNo,
+                        saleId = f.saleId,
+                        allocId = f.allocId
+                    )
+                )
+            }
+        }
+
+        // The movement batch must match the allocation batch.
+        val otherBatchId = createBatch(f.itemId, suffix = 61)
+        expectConstraint {
+            runBlocking {
+                database.stockMovementDao().insert(
+                    StockMovementEntity(
+                        movementDate = 303L,
+                        type = MovementType.SALE,
+                        batchId = otherBatchId,
+                        itemId = f.itemId,
+                        qtyDelta = -10L,
+                        costDelta = -1_000L,
+                        invoiceRef = f.displayNo,
+                        saleId = f.saleId,
+                        allocId = f.allocId
+                    )
+                )
+            }
+        }
+
+        // The sale ID must match the invoice reference.
+        val otherSale = createFixture(62)
+        expectConstraint {
+            runBlocking {
+                database.stockMovementDao().insert(
+                    StockMovementEntity(
+                        movementDate = 304L,
+                        type = MovementType.SALE,
+                        batchId = f.batchId,
+                        itemId = f.itemId,
+                        qtyDelta = -10L,
+                        costDelta = -1_000L,
+                        invoiceRef = f.displayNo,
+                        saleId = otherSale.saleId,
+                        allocId = f.allocId
+                    )
+                )
+            }
+        }
     }
 
     @Test

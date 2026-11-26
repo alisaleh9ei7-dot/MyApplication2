@@ -48,23 +48,26 @@ class ItemD2IntegrityTest {
         database.close()
     }
 
-    @Test
-    fun historicalSnapshotsDoNotBlockFactorChangeWhenAllStockIsZero() = runBlocking {
-        val itemId = database.itemDao().insert(
-            ItemEntity(tradeName = "Historical item", stripsPerBox = 10, createdAt = 1L)
-        )
+    // ---- Factor lock by history (V9 fix 1) -------------------------------------------------
+
+    private suspend fun newItem(name: String): Long = database.itemDao().insert(
+        ItemEntity(tradeName = name, stripsPerBox = 10, createdAt = 1L)
+    )
+
+    /** Purchase invoice + one line for the item; no batch is created. */
+    private suspend fun addPurchaseLine(itemId: Long, tag: String): Long {
         val supplierId = database.supplierDao().insert(
-            SupplierEntity(name = "Supplier", createdAt = 1L)
+            SupplierEntity(name = "Supplier $tag", createdAt = 1L)
         )
         val purchaseId = database.purchaseDao().insertInvoice(
             PurchaseInvoiceEntity(
                 supplierId = supplierId,
                 invoiceDate = 1L,
-                requestUuid = "factor-history-purchase",
+                requestUuid = "factor-lock-$tag",
                 createdAt = 1L
             )
         )
-        val purchaseLineId = database.purchaseDao().insertLine(
+        return database.purchaseDao().insertLine(
             PurchaseLineEntity(
                 purchaseId = purchaseId,
                 itemId = itemId,
@@ -73,6 +76,75 @@ class ItemD2IntegrityTest {
                 lineTotal = 100L
             )
         )
+    }
+
+    /**
+     * The factor must be refused at every layer, with no side effects:
+     * Service result, DAO update count, SQLite trigger (direct SQL), unchanged factor,
+     * and no item_changes row.
+     */
+    private suspend fun assertFactorLockedByHistory(itemId: Long) {
+        assertEquals(
+            ChangeStripsPerBoxResult.LOCKED_BY_HISTORY,
+            service.changeStripsPerBox(itemId, 12)
+        )
+        assertEquals(0, database.itemDao().updateStripsPerBoxWhenNoHistory(itemId, 12))
+        expectConstraint("PHARMACY_V8:E_ITEM_FACTOR_LOCKED_BY_HISTORY") {
+            database.openHelper.writableDatabase.execSQL(
+                "UPDATE items SET stripsPerBox = 12 WHERE itemId = ?",
+                arrayOf<Any?>(itemId)
+            )
+        }
+        assertEquals(10, database.itemDao().getById(itemId)?.stripsPerBox)
+        assertTrue(database.itemDao().changesFor(itemId).isEmpty())
+    }
+
+    @Test
+    fun newItemWithoutHistoryCanChangeFactor() = runBlocking {
+        val itemId = newItem("Brand new item")
+
+        assertEquals(ChangeStripsPerBoxResult.CHANGED, service.changeStripsPerBox(itemId, 12))
+        assertEquals(12, database.itemDao().getById(itemId)?.stripsPerBox)
+        val first = database.itemDao().changesFor(itemId).single()
+        assertEquals("10", first.oldValue)
+        assertEquals("12", first.newValue)
+
+        // Still no history, so a second change is allowed too.
+        assertEquals(ChangeStripsPerBoxResult.CHANGED, service.changeStripsPerBox(itemId, 15))
+        assertEquals(15, database.itemDao().getById(itemId)?.stripsPerBox)
+        assertEquals(2, database.itemDao().changesFor(itemId).size)
+    }
+
+    @Test
+    fun zeroQuantityBatchLocksFactorByHistory() = runBlocking {
+        val itemId = newItem("Zero batch item")
+        // OPENING batch with zero remaining quantity and no purchase line or movement,
+        // so the batch itself is the only historical record.
+        database.batchDao().insert(
+            BatchEntity(
+                itemId = itemId,
+                baseUnitsPerBox = 10,
+                source = BatchSource.OPENING,
+                qtyReceived = 10L,
+                qtyRemaining = 0L,
+                costRemaining = 0L,
+                receivedAt = 2L
+            )
+        )
+        assertFactorLockedByHistory(itemId)
+    }
+
+    @Test
+    fun purchaseLineLocksFactorByHistoryEvenWithZeroStock() = runBlocking {
+        val itemId = newItem("Purchased item")
+        addPurchaseLine(itemId, "purchase-only")
+        assertFactorLockedByHistory(itemId)
+    }
+
+    @Test
+    fun purchaseBatchWithZeroStockLocksFactorByHistory() = runBlocking {
+        val itemId = newItem("Sold-out purchased item")
+        val purchaseLineId = addPurchaseLine(itemId, "sold-out")
         database.batchDao().insert(
             BatchEntity(
                 itemId = itemId,
@@ -85,16 +157,66 @@ class ItemD2IntegrityTest {
                 receivedAt = 2L
             )
         )
+        assertFactorLockedByHistory(itemId)
+    }
 
-        assertEquals(
-            ChangeStripsPerBoxResult.CHANGED,
-            service.changeStripsPerBox(itemId, 12)
+    @Test
+    fun salesLineLocksFactorByHistory() = runBlocking {
+        val itemId = newItem("Sold item")
+        val saleId = database.salesDao().insertInvoice(
+            SalesInvoiceEntity(
+                displayNo = "INV-202611-000002",
+                grossTotal = 200L,
+                netTotal = 200L,
+                cartUuid = "factor-lock-sale"
+            )
         )
-        val changes = database.itemDao().changesFor(itemId)
-        assertEquals(1, changes.size)
-        assertEquals("10", changes.single().oldValue)
-        assertEquals("12", changes.single().newValue)
-        assertEquals(12, database.itemDao().getById(itemId)?.stripsPerBox)
+        database.salesDao().insertLine(
+            SalesLineEntity(
+                saleId = saleId,
+                itemId = itemId,
+                unitType = UnitType.BOX,
+                qty = 2L,
+                stripsPerBoxFrozen = 10,
+                baseQty = 20L,
+                unitPrice = 100L,
+                lineTotal = 200L
+            )
+        )
+        assertFactorLockedByHistory(itemId)
+    }
+
+    @Test
+    fun stockMovementLocksFactorByHistory() = runBlocking {
+        val itemId = newItem("Movement item")
+        // PURCHASE movement without a batch: the movement is the only historical record.
+        database.stockMovementDao().insert(
+            StockMovementEntity(
+                movementDate = 2L,
+                type = MovementType.PURCHASE,
+                batchId = null,
+                itemId = itemId,
+                qtyDelta = 10L,
+                costDelta = 100L
+            )
+        )
+        assertFactorLockedByHistory(itemId)
+    }
+
+    @Test
+    fun rejectedHistoricalChangeIsNotRetriedIntoAuditLog() = runBlocking {
+        val itemId = newItem("Audit item")
+        addPurchaseLine(itemId, "audit")
+        repeat(2) {
+            assertEquals(
+                ChangeStripsPerBoxResult.LOCKED_BY_HISTORY,
+                service.changeStripsPerBox(itemId, 12)
+            )
+        }
+        assertTrue(database.itemDao().changesFor(itemId).isEmpty())
+        assertEquals(10, database.itemDao().getById(itemId)?.stripsPerBox)
+        // Same value is still reported as UNCHANGED, not as a lock error.
+        assertEquals(ChangeStripsPerBoxResult.UNCHANGED, service.changeStripsPerBox(itemId, 10))
     }
 
     @Test
@@ -139,7 +261,7 @@ class ItemD2IntegrityTest {
             ChangeStripsPerBoxResult.LOCKED_BY_STOCK,
             service.changeStripsPerBox(itemId, 12)
         )
-        expectConstraint {
+        expectConstraint("PHARMACY_V8:E_ITEM_FACTOR_LOCKED_BY_STOCK") {
             database.openHelper.writableDatabase.execSQL(
                 "UPDATE items SET stripsPerBox = 12 WHERE itemId = ?",
                 arrayOf<Any?>(itemId)
@@ -183,8 +305,9 @@ class ItemD2IntegrityTest {
                 arrayOf<Any?>(saleId, itemId)
             )
         }
+        // A sales line now exists, so the factor is permanently locked (V9 fix 1).
         assertEquals(
-            ChangeStripsPerBoxResult.CHANGED,
+            ChangeStripsPerBoxResult.LOCKED_BY_HISTORY,
             service.changeStripsPerBox(itemId, 12)
         )
     }
@@ -277,12 +400,21 @@ class ItemD2IntegrityTest {
         }
     }
 
-    private suspend fun expectConstraint(block: suspend () -> Unit) {
+    private suspend fun expectConstraint(
+        expectedToken: String? = null,
+        block: suspend () -> Unit
+    ) {
         var thrown = false
         try {
             block()
-        } catch (_: SQLiteConstraintException) {
+        } catch (e: SQLiteConstraintException) {
             thrown = true
+            if (expectedToken != null) {
+                assertTrue(
+                    "Expected $expectedToken but was: ${e.message}",
+                    e.message?.contains(expectedToken) == true
+                )
+            }
         }
         assertTrue("Expected SQLiteConstraintException", thrown)
     }

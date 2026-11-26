@@ -33,19 +33,37 @@ interface ItemDao {
     ): Int
 
     /**
-     * Change the conversion factor only when every batch for this item has zero remaining stock.
+     * Change the conversion factor only when the item has never had any batch,
+     * purchase line, sales line, or stock movement. Once one exists the factor is
+     * permanently fixed, even if all remaining stock is zero.
      * The service must insert the corresponding ItemChangeEntity in the same transaction.
      */
     @Query(
         """UPDATE items SET stripsPerBox = :stripsPerBox
            WHERE itemId = :itemId
              AND (:stripsPerBox IS NULL OR :stripsPerBox >= 2)
-             AND NOT EXISTS (
-                 SELECT 1 FROM batches b
-                 WHERE b.itemId = :itemId AND b.qtyRemaining <> 0
-             )"""
+             AND NOT EXISTS (SELECT 1 FROM batches b WHERE b.itemId = :itemId)
+             AND NOT EXISTS (SELECT 1 FROM purchase_lines p WHERE p.itemId = :itemId)
+             AND NOT EXISTS (SELECT 1 FROM sales_lines s WHERE s.itemId = :itemId)
+             AND NOT EXISTS (SELECT 1 FROM stock_movements m WHERE m.itemId = :itemId)"""
     )
-    suspend fun updateStripsPerBoxWhenStockIsZero(itemId: Long, stripsPerBox: Int?): Int
+    suspend fun updateStripsPerBoxWhenNoHistory(itemId: Long, stripsPerBox: Int?): Int
+
+    /** True when at least one batch of this item has a non-zero remaining quantity. */
+    @Query("SELECT EXISTS(SELECT 1 FROM batches WHERE itemId = :itemId AND qtyRemaining <> 0)")
+    suspend fun hasNonZeroBatchStock(itemId: Long): Boolean
+
+    /**
+     * True when the item has any record that gives its conversion factor a historical meaning:
+     * a batch (even with zero quantity), purchase line, sales line, or stock movement.
+     */
+    @Query(
+        """SELECT EXISTS(SELECT 1 FROM batches WHERE itemId = :itemId)
+           OR EXISTS(SELECT 1 FROM purchase_lines WHERE itemId = :itemId)
+           OR EXISTS(SELECT 1 FROM sales_lines WHERE itemId = :itemId)
+           OR EXISTS(SELECT 1 FROM stock_movements WHERE itemId = :itemId)"""
+    )
+    suspend fun hasFactorHistory(itemId: Long): Boolean
 
     @Query("SELECT * FROM items WHERE itemId = :itemId")
     suspend fun getById(itemId: Long): ItemEntity?

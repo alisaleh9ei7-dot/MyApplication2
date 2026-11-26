@@ -12,7 +12,10 @@ enum class ChangeStripsPerBoxResult {
     UNCHANGED,
     ITEM_NOT_FOUND,
     INVALID_VALUE,
-    LOCKED_BY_STOCK
+    /** Non-zero remaining stock exists in at least one batch. */
+    LOCKED_BY_STOCK,
+    /** No remaining stock, but the item has a batch, purchase line, sales line, or stock movement. */
+    LOCKED_BY_HISTORY
 }
 
 /**
@@ -40,11 +43,16 @@ class ItemService(
             return@withTransaction ChangeStripsPerBoxResult.UNCHANGED
         }
 
-        // Historical records do not by themselves block this change. Non-zero
-        // remaining stock is checked atomically by the DAO update query.
-        val updated = dao.updateStripsPerBoxWhenStockIsZero(itemId, newValue)
+        // The factor can change only for an item that has never had any batch, purchase
+        // line, sales line, or stock movement. The DAO update query checks this atomically;
+        // when it refuses, we only classify the reason (stock first, then history).
+        val updated = dao.updateStripsPerBoxWhenNoHistory(itemId, newValue)
         if (updated != 1) {
-            return@withTransaction ChangeStripsPerBoxResult.LOCKED_BY_STOCK
+            return@withTransaction when {
+                dao.hasNonZeroBatchStock(itemId) -> ChangeStripsPerBoxResult.LOCKED_BY_STOCK
+                dao.hasFactorHistory(itemId) -> ChangeStripsPerBoxResult.LOCKED_BY_HISTORY
+                else -> error("stripsPerBox update refused for item $itemId without a lock reason")
+            }
         }
 
         dao.insertChange(
